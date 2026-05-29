@@ -1,0 +1,29 @@
+DEPLOY STEPS - Radio Transcriber Search Fix
+=============================================
+
+Run these commands one at a time in your terminal.
+
+STEP 1: Stage the changed files
+--------------------------------
+git add app.py requirements.txt docs/
+
+
+STEP 2: Commit the changes
+--------------------------
+git commit -m "Deploy server-side search + 30 per page pagination"
+
+
+STEP 3: Push to trigger auto-deploy on Render
+---------------------------------------------
+git push
+
+
+AFTER PUSHING
+=============
+- Your Render service should auto-deploy because of the push.
+- Watch the Render dashboard for the new deployment to finish.
+- Once it's live, test searching for "henry" on the actual website.
+
+If you run into any errors, copy/paste the terminal output here and I'll help.
+
+When the site is updated, let me know and we can verify the search is now returning proper results across the full history.

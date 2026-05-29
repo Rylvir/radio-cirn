@@ -1,0 +1,61 @@
+HOW TO COPY THE UPDATED FILES FROM THE WORKTREE
+==================================================
+
+Problem:
+You are in ~/radio-transcriber/, but the new app.py, requirements.txt,
+and docs/ folder currently only exist in the git worktree at:
+
+    /home/scribe/.grok/worktrees/scribe-radio-transcriber/transcription/
+
+You must copy them over before you can commit and push.
+
+--------------------------------------------------
+STEP-BY-STEP COMMANDS (run one at a time)
+--------------------------------------------------
+
+1. Go to your main radio-transcriber directory:
+
+   cd ~/radio-transcriber
+
+2. Copy the updated app.py:
+
+   cp /home/scribe/.grok/worktrees/scribe-radio-transcriber/transcription/app.py .
+
+3. Copy the updated requirements.txt:
+
+   cp /home/scribe/.grok/worktrees/scribe-radio-transcriber/transcription/requirements.txt .
+
+4. Copy the docs folder (this will create it if it doesn't exist):
+
+   cp -r /home/scribe/.grok/worktrees/scribe-radio-transcriber/transcription/docs .
+
+5. Check what changed:
+
+   git status
+
+You should now see modifications to app.py and requirements.txt, plus a new docs/ folder.
+
+6. Stage the files:
+
+   git add app.py requirements.txt docs/
+
+7. Commit:
+
+   git commit -m "Deploy server-side search + 30 per page pagination"
+
+8. Push (this will trigger auto-deploy on Render):
+
+   git push
+
+--------------------------------------------------
+AFTER PUSHING
+--------------------------------------------------
+
+- Watch your Render dashboard for the new deployment.
+- Once it's live, test searching for "henry" on the real website.
+- It should now return many more results than the old ~29.
+
+If you get any errors during the copy or git commands, paste the output here and I will help.
+
+Tip: You can view this file again later with:
+   cat docs/copy-from-worktree.txt

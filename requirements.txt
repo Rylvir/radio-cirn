@@ -1,5 +1,8 @@
-faster-whisper
-pandas
-supabase
+# Web app dependencies (required for the Streamlit site)
 streamlit
-tqdm
+supabase
+
+# Transcription pipeline dependencies (not needed for the web app itself)
+# faster-whisper
+# pandas
+# tqdm
