@@ -1,0 +1,256 @@
+"""Severity-bar checks for incident classification. No audio, no network."""
+
+import tempfile
+import unittest
+from pathlib import Path
+
+import incident_classify as ic
+
+
+class ClassifyTests(unittest.TestCase):
+    def test_structure_smoke_showing(self):
+        hit = ic.classify("structure fire, smoke showing, 400 elm street")
+        self.assertEqual(hit["category"], "structure_fire")
+
+    def test_working_fire_defensive(self):
+        hit = ic.classify("working fire, going defensive on the commercial structure")
+        self.assertEqual(hit["category"], "structure_fire")
+
+    def test_second_alarm(self):
+        hit = ic.classify("make this a second alarm, house fire")
+        self.assertEqual(hit["category"], "structure_fire")
+
+    def test_smoke_investigation_is_not_an_alert(self):
+        self.assertIsNone(ic.classify("smoke investigation, nothing showing, code 4"))
+
+    def test_negated_smoke_showing(self):
+        self.assertIsNone(ic.classify("structure fire reported, no smoke showing"))
+
+    def test_vehicle_fire(self):
+        hit = ic.classify("vehicle fire, smoke showing, highway 80")
+        self.assertEqual(hit["category"], "other_fire")
+
+    def test_dumpster_without_severity(self):
+        self.assertIsNone(ic.classify("dumpster fire, nothing showing"))
+
+    def test_small_grass_fire(self):
+        self.assertIsNone(ic.classify("small grass fire behind the station"))
+
+    def test_major_brush(self):
+        hit = ic.classify("major brush fire, multiple acres, newcastle road")
+        self.assertEqual(hit["category"], "brush_grass_fire")
+
+    def test_rollover_extrication(self):
+        hit = ic.classify("TC with rollover, extrication required")
+        self.assertEqual(hit["category"], "motor_vehicle_accident")
+
+    def test_minor_tc(self):
+        self.assertIsNone(ic.classify("traffic collision, minor, code 4"))
+
+    def test_multiple_vehicles_needs_a_crash(self):
+        self.assertIsNone(ic.classify("multiple vehicles on scene at the house fire"))
+
+    def test_shots_fired(self):
+        hit = ic.classify("shots fired, 200 block of main street")
+        self.assertEqual(hit["category"], "shooting")
+
+    def test_a_shooting(self):
+        hit = ic.classify("we have a shooting at the 200 block of main street")
+        self.assertEqual(hit["category"], "shooting")
+
+    def test_shooting_the_compass_is_not_a_shooting(self):
+        self.assertIsNone(ic.classify(
+            "Start shooting the compasser. The FBI numbers for your subject are different."))
+
+    def test_negated_shots(self):
+        self.assertIsNone(ic.classify("no shots fired, just fireworks"))
+
+    def test_shooting_pain_is_medical(self):
+        self.assertIsNone(ic.classify("patient has shooting pain in the left arm"))
+
+    def test_firefighter_down_wins(self):
+        hit = ic.classify("mayday mayday firefighter down, structure fire")
+        self.assertEqual(hit["category"], "firefighter_down")
+
+    def test_mayday_dealership_is_not_a_mayday(self):
+        self.assertIsNone(ic.classify(
+            "It's supposed to be at a Mayday dealership getting a tire"))
+
+    def test_building_collapse(self):
+        hit = ic.classify("building collapse, commercial structure on oak avenue")
+        self.assertEqual(hit["category"], "building_collapse")
+
+    def test_mci(self):
+        hit = ic.classify("this is an MCI, multiple patients")
+        self.assertEqual(hit["category"], "mass_casualty")
+
+    def test_airport(self):
+        hit = ic.classify("airport alert, aircraft emergency on the runway")
+        self.assertEqual(hit["category"], "airport_alert")
+
+    def test_alert_3_without_airport_is_not_airport(self):
+        hit = ic.classify("third alarm structure fire, smoke showing")
+        self.assertEqual(hit["category"], "structure_fire")
+
+    def test_technical_rescue(self):
+        hit = ic.classify("confined space rescue, worker trapped in the tank")
+        self.assertEqual(hit["category"], "technical_rescue")
+
+    def test_routine_dispatch_chatter(self):
+        self.assertIsNone(ic.classify("copy, show me 10-8, returning to quarters"))
+
+    def test_foresthill_on_a_routine_call(self):
+        hit = ic.classify("medical aid, 200 Main Street, Foresthill")
+        self.assertEqual(hit["category"], "foresthill")
+
+    def test_forest_hill_spelled_apart(self):
+        hit = ic.classify("engine 84 is responding forest hill")
+        self.assertEqual(hit["category"], "foresthill")
+
+    def test_foresthill_structure_fire_stays_a_structure_fire(self):
+        hit = ic.classify("structure fire, smoke showing, Foresthill Road")
+        self.assertEqual(hit["category"], "structure_fire")
+
+    def test_not_foresthill_is_not_an_alert(self):
+        self.assertIsNone(ic.classify("not Foresthill, this is Auburn"))
+
+    def test_foresthill_as_transcribed(self):
+        # Real renderings from radio_calls.db.
+        for text in (
+            "Henry, we're here at Michigan Bluffs and Forrest Hill Road.",
+            "your subject out of Forest Hills, valid and clear",
+            "Forest Hilltow, ETA, 15 minutes.",
+            "four people on the catwalk under the bridge on the forest hillside",
+            "80 West at 4th Hill, okay.",
+            "party separated at the 4th Hill Fire Station",
+            "16360 Poster Hills Road, second hand info to the RP",
+            "Possible medical. Posterhills and sugar pine.",
+            "126 Foster Hills Road, Iron Horse Road.",
+            "Foresthill-Road at Bowman",
+            "FORESTHILL",
+        ):
+            with self.subTest(text=text):
+                hit = ic.classify(text)
+                self.assertIsNotNone(hit)
+                self.assertEqual(hit["category"], "foresthill")
+
+    def test_not_foresthill_lookalikes(self):
+        for text in (
+            "white Subaru Forester, four door",
+            "Lake Forest and Meadowbrook",
+            "Placer Hills Road in Meadow Vista",
+            "Tahoe Forest Hospital",
+            "Forest Service unit to Placer",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(ic.classify(text))
+
+    def test_foresthill_survives_an_earlier_negation(self):
+        hit = ic.classify("negative contact, show me en route to Foresthill Road")
+        self.assertEqual(hit["category"], "foresthill")
+
+    def test_foresthill_grass_fire_with_smoke_showing(self):
+        # Brush + severity without "major" used to return None outright.
+        hit = ic.classify("grass fire, smoke showing, Foresthill Road")
+        self.assertEqual(hit["category"], "foresthill")
+
+    def test_foresthill_major_incident_is_tagged(self):
+        hit = ic.classify("structure fire, smoke showing, Foresthill Road")
+        self.assertEqual(hit.get("place"), "foresthill")
+        self.assertIsNone(ic.classify("structure fire, smoke showing").get("place"))
+
+    def test_partial_hotword_echo_is_not_foresthill(self):
+        text = "Beep. Beep. auburn lincoln roseville placer nevada el dorado miller sacramento foresthill"
+        self.assertIsNone(ic.classify(text))
+        self.assertEqual(ic.strip_prompt_echo(text), "Beep. Beep.")
+
+    def test_foresthill_at_the_end_of_a_real_call_is_kept(self):
+        hit = ic.classify("Engine 16, respond medical aid, Auburn, Foresthill")
+        self.assertEqual(hit["category"], "foresthill")
+
+    def test_hotword_echo_does_not_create_an_mva(self):
+        text = (
+            "Standby. Paul 4219. He's detained. His probation on his DL "
+            "does not indicate search terms. Lincoln Miller Roseville "
+            "smoke showing working fire extrication"
+        )
+        self.assertIsNone(ic.classify(text))
+
+
+class MergeTests(unittest.TestCase):
+    def _alert(self, **over):
+        base = {
+            "id": "a",
+            "category": "structure_fire",
+            "label": "Structure Fire",
+            "detail": "x",
+            "evidence": "smoke showing",
+            "text": "structure fire smoke showing 400 elm street",
+            "talkgroup": 2,
+            "talkgroup_name": "Placer",
+            "system": "fire",
+            "started": "2026-09-27T12:00:00",
+            "updated": "2026-09-27T12:00:00",
+            "rel": "fire/a.wav",
+            "calls": 1,
+            "location": "400 elm street",
+        }
+        base.update(over)
+        return base
+
+    def test_same_talkgroup_updates_one_alert(self):
+        first = self._alert()
+        nxt = self._alert(id="b", updated="2026-09-27T12:10:00",
+                          text="going defensive 400 elm street", calls=1)
+        out = ic.merge_alert([first], nxt)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["calls"], 2)
+        self.assertIn("defensive", out[0]["text"])
+        self.assertEqual(out[0]["started"], "2026-09-27T12:00:00")
+
+    def test_foresthill_calls_on_the_same_channel_stay_separate(self):
+        first = self._alert(category="foresthill", label="Foresthill",
+                            text="medical foresthill", location=None)
+        nxt = self._alert(id="b", category="foresthill", label="Foresthill",
+                          updated="2026-09-27T12:10:00",
+                          text="traffic stop foresthill", location=None)
+        self.assertEqual(len(ic.merge_alert([first], nxt)), 2)
+
+    def test_different_address_stays_separate(self):
+        first = self._alert()
+        nxt = self._alert(id="b", updated="2026-09-27T12:10:00",
+                          text="smoke showing 900 oak avenue",
+                          location="900 oak avenue")
+        out = ic.merge_alert([first], nxt)
+        self.assertEqual(len(out), 2)
+
+    def test_same_address_across_talkgroups(self):
+        first = self._alert()
+        nxt = self._alert(id="b", talkgroup=2001, talkgroup_name="PCSO West",
+                          system="cirn", updated="2026-09-27T12:20:00")
+        out = ic.merge_alert([first], nxt)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["talkgroup_name"], "PCSO West")
+
+    def test_record_alert_roundtrip(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "incident_alerts.json"
+            hit = ic.classify("shots fired at 200 main street")
+            ic.record_alert(
+                hit, talkgroup=2001, talkgroup_name="PCSO West", system="cirn",
+                when_iso="2026-09-27T18:00:00", rel="cirn/x.wav",
+                text="shots fired at 200 main street", alerts_path=path,
+            )
+            ic.record_alert(
+                hit, talkgroup=2001, talkgroup_name="PCSO West", system="cirn",
+                when_iso="2026-09-27T18:05:00", rel="cirn/y.wav",
+                text="still shots fired at 200 main street", alerts_path=path,
+            )
+            data = __import__("json").loads(path.read_text())
+            self.assertEqual(len(data["alerts"]), 1)
+            self.assertEqual(data["alerts"][0]["calls"], 2)
+            self.assertEqual(len(data["categories"]), 11)
+
+
+if __name__ == "__main__":
+    unittest.main()

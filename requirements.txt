@@ -1,8 +1,2 @@
-# Web app dependencies (required for the Streamlit site)
-streamlit
-supabase
-
-# Transcription pipeline dependencies (not needed for the web app itself)
-# faster-whisper
-# pandas
-# tqdm
+# Live pipeline: watch_transcribe.py + incident_classify.py
+faster-whisper==1.2.1

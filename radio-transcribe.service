@@ -1,0 +1,15 @@
+# /etc/systemd/system/radio-transcribe.service
+[Unit]
+Description=Radio transcription and major-incident alerts
+After=network.target
+
+[Service]
+Type=simple
+User=scribe
+WorkingDirectory=/home/scribe/radio-transcriber
+ExecStart=/home/scribe/radio-transcriber/venv/bin/python3 /home/scribe/radio-transcriber/watch_transcribe.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
