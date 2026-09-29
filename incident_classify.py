@@ -371,6 +371,9 @@ def _epoch(iso: str) -> float:
 def _apply_merge(prev: dict, new: dict):
     channels = list(prev.get("channels") or [prev.get("talkgroup_name") or ""])
     name = new.get("talkgroup_name") or ""
+    # Tell the caller what happened, so it can notify on a new channel only.
+    new["merged_into"] = prev.get("id")
+    new["new_channel"] = bool(name) and name not in channels
     if name and name not in channels:
         channels.append(name)
     prev["channels"] = [c for c in channels if c]
@@ -459,7 +462,12 @@ def _write_atomic(path: Path, payload: dict):
 
 def record_alert(hit: dict, *, talkgroup, talkgroup_name, system, when_iso,
                  rel, text, alerts_path=None) -> dict:
-    """Merge one classified call into the alerts file. Returns the record."""
+    """Merge one classified call into the alerts file.
+
+    Returns the new record. When it was folded into an open alert, the
+    record carries merged_into (that alert's id), new_channel, and channels
+    (every channel on the merged alert).
+    """
     path = Path(alerts_path) if alerts_path else ALERTS_PATH
     text = re.sub(r"\s+", " ", (text or "")).strip()
     if len(text) > 500:
@@ -493,6 +501,12 @@ def record_alert(hit: dict, *, talkgroup, talkgroup_name, system, when_iso,
         try:
             data = _load(path)
             data["alerts"] = merge_alert(data["alerts"], new)
+            if new.get("merged_into"):
+                for a in data["alerts"]:
+                    if a.get("id") == new["merged_into"]:
+                        new["channels"] = list(a.get("channels") or [])
+                        new["calls"] = a.get("calls") or 1
+                        break
             _write_atomic(path, data)
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)

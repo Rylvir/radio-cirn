@@ -31,6 +31,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import notify
 from incident_classify import classify, record_alert, strip_prompt_echo
 
 FIRE_DIR = Path("/home/scribe/trunk-build/fire")
@@ -310,7 +311,7 @@ def process(model, conn, wav: Path, seen: dict) -> str:
         return "error"
     if hit:
         try:
-            record_alert(
+            record = record_alert(
                 hit,
                 talkgroup=tg,
                 talkgroup_name=name,
@@ -324,6 +325,7 @@ def process(model, conn, wav: Path, seen: dict) -> str:
             return "error"
         log.info("ALERT %s (%s) ← %s | %s",
                  hit["category"], hit["evidence"], wav.name, text[:140])
+        notify.send(record)
         return "alert"
     log.info("routine %s %s: %s", tg, name, (text or "")[:100])
     return "routine"
@@ -362,6 +364,7 @@ def main(backfill: int = 0, once: bool = False):
     log.info("=== radio transcriber started ===")
     log.info("fire MHz: %s", sorted(FIRE_MHZ))
     log.info("law talkgroups: %s", sorted(LAW_TG))
+    log.info("ntfy: %s", "on" if notify.enabled() else "off (set NTFY_URL)")
     seen = load_state()
     save_state(seen)
 
@@ -427,5 +430,18 @@ if __name__ == "__main__":
                     help="Transcribe the newest N matching recordings on startup")
     ap.add_argument("--once", action="store_true",
                     help="One pass, then exit")
+    ap.add_argument("--test-ntfy", action="store_true",
+                    help="Send one sample alert to NTFY_URL, then exit")
     args = ap.parse_args()
+    if args.test_ntfy:
+        if not notify.enabled():
+            sys.exit("NTFY_URL is not set")
+        logging.basicConfig(level=logging.INFO)
+        notify.send({
+            "category": "motor_vehicle_accident", "label": "MVA (test)",
+            "channels": ["NEU West"],
+            "text": "Test from radio-transcriber. High level TC, Highway 49 at Dry Creek.",
+        }, wait=True)
+        print("sent test to", notify.NTFY_URL)
+        sys.exit(0)
     main(backfill=args.backfill, once=args.once)
