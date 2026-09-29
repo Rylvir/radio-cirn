@@ -70,10 +70,13 @@ INITIAL_PROMPT = "Fire and police dispatch in Placer County, California."
 # Keep incident_classify._HOTWORD_WORDS in sync with this list.
 # Place and unit words only. Severity words (extrication, smoke showing,
 # working fire) used to be here and Whisper copied them onto routine calls,
-# which then tripped the alert rules.
+# which then tripped the alert rules. "foresthill" was tried here too and
+# Whisper tacked "lincoln forest hill" onto a garbled "down staffed" on
+# Nevada, a false Foresthill alert. The matcher reads "forest hill" fine
+# without the hint, so place names that raise alerts stay out.
 HOTWORDS = (
     "battalion engine truck auburn lincoln roseville placer nevada "
-    "el dorado miller sacramento foresthill"
+    "el dorado miller sacramento"
 )
 
 log = logging.getLogger("watch_transcribe")

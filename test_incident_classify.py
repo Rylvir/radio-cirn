@@ -164,6 +164,12 @@ class ClassifyTests(unittest.TestCase):
         self.assertIsNone(ic.classify(text))
         self.assertEqual(ic.strip_prompt_echo(text), "Beep. Beep.")
 
+    def test_foresthill_is_not_a_decoder_hint(self):
+        # A hint word gets echoed onto garbled audio: "Grass up, lincoln
+        # forest hill" on Nevada, 2026-09-28. Alerting words stay out.
+        import watch_transcribe
+        self.assertNotIn("forest", watch_transcribe.HOTWORDS)
+
     def test_foresthill_at_the_end_of_a_real_call_is_kept(self):
         hit = ic.classify("Engine 16, respond medical aid, Auburn, Foresthill")
         self.assertEqual(hit["category"], "foresthill")

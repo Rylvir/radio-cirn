@@ -179,9 +179,9 @@ _HOTWORD_ECHO = re.compile(
 )
 
 
-# Words in watch_transcribe.HOTWORDS. Whisper also echoes a partial tail of
-# the list ("placer nevada el dorado miller sacramento"); now that the list
-# ends in "foresthill", such an echo would raise a false Foresthill alert.
+# Words in watch_transcribe.HOTWORDS, plus the retired hint "foresthill"
+# from when it was a hint: Whisper echoes a partial tail of the list
+# ("placer nevada el dorado miller sacramento", "lincoln forest hill").
 _HOTWORD_WORDS = frozenset(
     "battalion engine truck auburn lincoln roseville placer nevada "
     "el dorado miller sacramento foresthill".split()
