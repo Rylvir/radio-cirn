@@ -168,6 +168,30 @@ class ClassifyTests(unittest.TestCase):
         hit = ic.classify("Engine 16, respond medical aid, Auburn, Foresthill")
         self.assertEqual(hit["category"], "foresthill")
 
+    def test_major_vehicle_accident(self):
+        hit = ic.classify("respond to a major vehicle accident, 49 and Dry Creek")
+        self.assertEqual(hit["category"], "motor_vehicle_accident")
+
+    def test_high_level_accident(self):
+        for text in ("High level TC, Highway 49 at Dry Creek",
+                     "high level response for a vehicle accident on 80 west"):
+            with self.subTest(text=text):
+                self.assertEqual(ic.classify(text)["category"],
+                                 "motor_vehicle_accident")
+
+    def test_high_level_alone_is_not_an_mva(self):
+        self.assertIsNone(ic.classify("Pretty high level 10-codes, go ahead."))
+
+    def test_plain_vehicle_accident_is_still_routine(self):
+        self.assertIsNone(ic.classify("vehicle accident, Barton Road, non-injury"))
+
+    def test_location_tokens(self):
+        self.assertEqual(ic.location_tokens("Highway 49 at Dry Creek Road"),
+                         {"hwy 49", "dry creek"})
+        self.assertEqual(ic.location_tokens("eastbound 80 at Bell Rd"),
+                         {"hwy 80", "bell"})
+        self.assertEqual(ic.location_tokens("I 10-4, copy"), set())
+
     def test_hotword_echo_does_not_create_an_mva(self):
         text = (
             "Standby. Paul 4219. He's detained. His probation on his DL "
@@ -231,6 +255,42 @@ class MergeTests(unittest.TestCase):
         out = ic.merge_alert([first], nxt)
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["talkgroup_name"], "PCSO West")
+
+    def _mva(self, **over):
+        base = self._alert(category="motor_vehicle_accident", label="MVA",
+                           location=None, talkgroup=151325,
+                           talkgroup_name="NEU West", system="fire",
+                           text="High level TC, Highway 49 at Dry Creek")
+        base.update(over)
+        return base
+
+    def _pcso(self, **over):
+        base = dict(id="b", talkgroup=2001, talkgroup_name="PCSO West",
+                    system="cirn", updated="2026-09-27T12:06:00",
+                    text="major vehicle accident, 49 and Dry Creek")
+        base.update(over)
+        return self._mva(**base)
+
+    def test_fire_and_law_same_crash_merge(self):
+        out = ic.merge_alert([self._mva()], self._pcso())
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["calls"], 2)
+        self.assertEqual(out[0]["channels"], ["NEU West", "PCSO West"])
+
+    def test_cross_channel_merge_when_one_side_has_no_place(self):
+        out = ic.merge_alert([self._mva()],
+                             self._pcso(text="major vehicle accident, units responding"))
+        self.assertEqual(len(out), 1)
+
+    def test_cross_channel_different_roads_stay_separate(self):
+        out = ic.merge_alert([self._mva()],
+                             self._pcso(text="major vehicle accident, 80 west at Bell Road"))
+        self.assertEqual(len(out), 2)
+
+    def test_cross_channel_too_late_stays_separate(self):
+        out = ic.merge_alert([self._mva()],
+                             self._pcso(updated="2026-09-27T12:40:00"))
+        self.assertEqual(len(out), 2)
 
     def test_record_alert_roundtrip(self):
         with tempfile.TemporaryDirectory() as d:

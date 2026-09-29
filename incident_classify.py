@@ -20,6 +20,11 @@ ALERTS_PATH = Path("/home/scribe/trunk-build/incident_alerts.json")
 ALERT_CAP = 200
 MERGE_SAME_TG_SEC = 30 * 60
 MERGE_LOCATION_SEC = 2 * 60 * 60
+# Fire and law often report the same incident in different words
+# ("High level TC, Highway 49" on NEU, "major vehicle accident, 49 and Dry
+# Creek" on PCSO West). Same category on another channel within this window
+# merges unless both name places and none of them overlap.
+MERGE_CROSS_CHANNEL_SEC = 15 * 60
 
 # id, label, detail (the severity bar), short chip for the dashboard filter.
 CATEGORIES = [
@@ -98,6 +103,15 @@ _MVA_CONTEXT = re.compile(
 )
 _MVA_EXTRA = re.compile(
     r"\b(major damage|multiple vehicles)\b"
+)
+# "Major vehicle accident", "high level TC": the dispatcher's own severity.
+_MVA_MAJOR = re.compile(
+    r"\b((?:major|high[\s-]level)\s+(?:\w+\s+){0,2}?"
+    r"(?:accident|collision|tc|mva|crash|wreck))\b"
+)
+_HIGH_LEVEL = re.compile(r"\bhigh[\s-]level\b")
+_CRASH_WORD = re.compile(
+    r"\b(accident|collision|tc|mva|crash|wreck)\b"
 )
 _SEVERITY = re.compile(
     r"\b(smoke (?:is )?showing|showing smoke|working (?:a )?fire|"
@@ -205,6 +219,45 @@ def _mentioned(text: str, pattern: re.Pattern):
     return None
 
 
+# State routes and interstates that cross the watched area. A bare number
+# only counts as a highway when it is one of these.
+_AREA_HIGHWAYS = {"20", "49", "50", "65", "70", "80", "99", "174", "193"}
+_HWY_ANY = re.compile(
+    r"\b(?:highway|hwy|interstate|i|sr|route|state route)[\s-]*(\d{1,3})\b"
+)
+_HWY_DIR = re.compile(
+    r"\b(\d{2,3})\s+(?:east|west|north|south)(?:bound)?\b|"
+    r"\b(?:east|west|north|south)bound\s+(\d{2,3})\b"
+)
+_ROAD_NAME = re.compile(
+    r"\b([a-z]+(?:\s+[a-z]+)?)\s+"
+    r"(street|st|road|rd|avenue|ave|drive|dr|lane|ln|way|"
+    r"blvd|boulevard|court|ct|circle|cir|place|pl)\b"
+)
+_ROAD_STOP = {"the", "a", "on", "at", "and", "of", "to", "in", "off", "is",
+              "west", "east", "north", "south", "old", "new", "your", "that"}
+
+
+def location_tokens(text: str) -> set:
+    """Loose place tokens ("hwy 49", "dry creek") for cross-channel merging."""
+    t = normalize(text)
+    out = set()
+    for m in _HWY_ANY.finditer(t):
+        if m.group(1) in _AREA_HIGHWAYS:
+            out.add(f"hwy {m.group(1)}")
+    for m in _HWY_DIR.finditer(t):
+        num = m.group(1) or m.group(2)
+        if num in _AREA_HIGHWAYS:
+            out.add(f"hwy {num}")
+    for m in _ROAD_NAME.finditer(t):
+        words = [w for w in m.group(1).split() if w not in _ROAD_STOP]
+        if words:
+            out.add(" ".join(words))
+    for m in _FORESTHILL.finditer(t):
+        out.add("foresthill")
+    return out
+
+
 def location_key(text: str):
     t = normalize(text)
     m = _LOC_STREET.search(t)
@@ -283,7 +336,9 @@ def _classify_major(t: str):
     if _mentioned(t, _TECH):
         return _hit("technical_rescue", _mentioned(t, _TECH))
 
-    mva = _mentioned(t, _MVA_STRONG)
+    mva = _mentioned(t, _MVA_STRONG) or _mentioned(t, _MVA_MAJOR)
+    if not mva and _mentioned(t, _HIGH_LEVEL) and _mentioned(t, _CRASH_WORD):
+        mva = "high level " + _mentioned(t, _CRASH_WORD)
     if not mva and _mentioned(t, _MVA_CONTEXT) and _mentioned(t, _MVA_EXTRA):
         mva = _mentioned(t, _MVA_EXTRA)
     if mva:
@@ -314,6 +369,12 @@ def _epoch(iso: str) -> float:
 
 
 def _apply_merge(prev: dict, new: dict):
+    channels = list(prev.get("channels") or [prev.get("talkgroup_name") or ""])
+    name = new.get("talkgroup_name") or ""
+    if name and name not in channels:
+        channels.append(name)
+    prev["channels"] = [c for c in channels if c]
+    prev["loc_tokens"] = sorted(_tokens_of(prev) | _tokens_of(new))
     prev["updated"] = new["updated"]
     prev["text"] = new["text"]
     if new.get("rel"):
@@ -327,6 +388,12 @@ def _apply_merge(prev: dict, new: dict):
         prev["location"] = new["location"]
     if new.get("place") and not prev.get("place"):
         prev["place"] = new["place"]
+
+
+def _tokens_of(alert: dict) -> set:
+    if alert.get("loc_tokens") is not None:
+        return set(alert["loc_tokens"])
+    return location_tokens(alert.get("text") or "")
 
 
 def merge_alert(alerts: list, new: dict) -> list:
@@ -355,6 +422,12 @@ def merge_alert(alerts: list, new: dict) -> list:
         if loc and prev_loc and loc == prev_loc and gap <= MERGE_LOCATION_SEC:
             _apply_merge(prev, new)
             return alerts[-ALERT_CAP:]
+        if (not same_tg and new.get("category") != "foresthill"
+                and gap <= MERGE_CROSS_CHANNEL_SEC):
+            a, b = _tokens_of(prev), _tokens_of(new)
+            if not a or not b or a & b:
+                _apply_merge(prev, new)
+                return alerts[-ALERT_CAP:]
     alerts.append(new)
     return alerts[-ALERT_CAP:]
 
@@ -407,6 +480,8 @@ def record_alert(hit: dict, *, talkgroup, talkgroup_name, system, when_iso,
         "rel": rel or "",
         "calls": 1,
         "location": location_key(text),
+        "loc_tokens": sorted(location_tokens(text)),
+        "channels": [talkgroup_name] if talkgroup_name else [],
     }
     if hit.get("place"):
         new["place"] = hit["place"]
