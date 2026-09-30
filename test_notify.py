@@ -51,6 +51,15 @@ class NotifyRuleTests(unittest.TestCase):
                               "place": "foresthill", "channels": ["Placer"]})[0]
         self.assertEqual(title, "Structure Fire - Placer - Foresthill")
 
+    def test_on_scene_notification(self):
+        title, body, headers = notify.build_on_scene({
+            "label": "MVA", "talkgroup_name": "NEU West",
+            "headline": {"channel": "NEU West",
+                         "text": "Engine 2351 on scene, one on its roof, one trapped"}})
+        self.assertEqual(title, "On scene: MVA - NEU West")
+        self.assertIn("one trapped", body)
+        self.assertEqual(headers["Priority"], "3")
+
     def test_long_transcript_is_trimmed(self):
         body = notify.build({"label": "MVA", "text": "x" * 5000})[1]
         self.assertLessEqual(len(body.encode()), 4096)

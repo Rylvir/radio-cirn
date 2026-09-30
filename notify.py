@@ -78,6 +78,34 @@ def build(record: dict):
     return title, body, headers
 
 
+def build_on_scene(record: dict):
+    """(title, body, headers) for an alert's first on-scene report."""
+    head = record.get("headline") or {}
+    label = record.get("label") or "Alert"
+    channel = head.get("channel") or record.get("talkgroup_name") or ""
+    title = f"On scene: {label}" + (f" - {channel}" if channel else "")
+    body = (head.get("text") or "").strip() or "(no transcript text)"
+    if len(body) > BODY_MAX:
+        body = body[:BODY_MAX - 3] + "..."
+    headers = {"Title": _ascii(title), "Priority": "3", "Tags": "eyes"}
+    if NTFY_CLICK:
+        headers["Click"] = NTFY_CLICK
+    if NTFY_TOKEN:
+        headers["Authorization"] = f"Bearer {NTFY_TOKEN}"
+    return title, body, headers
+
+
+def send_on_scene(record: dict, wait: bool = False):
+    """Push the first on-scene size-up that joins an existing alert."""
+    if not enabled() or not record.get("headline"):
+        return
+    _title, body, headers = build_on_scene(record)
+    if wait:
+        _post(body, headers)
+        return
+    threading.Thread(target=_post, args=(body, headers), daemon=True).start()
+
+
 def _post(body: str, headers: dict):
     try:
         req = urllib.request.Request(NTFY_URL, data=body.encode("utf-8"),

@@ -32,7 +32,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import notify
-from incident_classify import classify, record_alert, strip_prompt_echo
+from incident_classify import (attach_on_scene, classify, record_alert,
+                               strip_prompt_echo)
 
 FIRE_DIR = Path("/home/scribe/trunk-build/fire")
 CIRN_DIR = Path("/home/scribe/trunk-build/cirn")
@@ -329,6 +330,20 @@ def process(model, conn, wav: Path, seen: dict) -> str:
         log.info("ALERT %s (%s) ← %s | %s",
                  hit["category"], hit["evidence"], wav.name, text[:140])
         notify.send(record)
+        if record.get("merged_into") and record.get("first_on_scene"):
+            notify.send_on_scene(record)
+        return "alert"
+    try:
+        joined = attach_on_scene(
+            talkgroup=tg, talkgroup_name=name, system=sysname,
+            when_iso=start, rel=rel_of(wav), text=text,
+        )
+    except Exception:
+        log.exception("on-scene attach failed: %s", wav.name)
+        joined = None
+    if joined:
+        log.info("ON SCENE %s ← %s | %s", joined.get("category"), wav.name, text[:140])
+        notify.send_on_scene(joined)
         return "alert"
     log.info("routine %s %s: %s", tg, name, (text or "")[:100])
     return "routine"

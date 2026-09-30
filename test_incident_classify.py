@@ -392,5 +392,61 @@ class MergeTests(unittest.TestCase):
             self.assertEqual(len(data["categories"]), 11)
 
 
+class OnSceneTests(unittest.TestCase):
+    def test_on_scene_wording(self):
+        for text in ("I'm R134 on scene.", "Engine 12-82 is 97. Medic 142 is 97.",
+                     "Paul 46, we're 97 AFH.", "Battalion 12 at scene, working fire",
+                     "At scene with CHP, false alarm", "crews on scene, knockdown"):
+            with self.subTest(text=text):
+                self.assertTrue(ic.on_scene(text))
+
+    def test_dispatch_template_is_not_an_arrival(self):
+        for text in ("First unit at scene, Highway IC on XPL, TAC 9.",
+                     "ETA to scene 10 minutes", "not on scene yet",
+                     "reported extinguisher used at scene and now no flames"):
+            with self.subTest(text=text):
+                self.assertIsNone(ic.on_scene(text))
+
+    def _setup(self, d):
+        path = Path(d) / "a.json"
+        hit = ic.classify("rollover with extrication, Highway 49 at Dry Creek, engine 2351, medic 142")
+        ic.record_alert(hit, talkgroup=151325, talkgroup_name="NEU West", system="fire",
+                        when_iso="2026-09-29T12:00:00", rel="fire/a.wav",
+                        text="rollover with extrication, Highway 49 at Dry Creek, engine 2351, medic 142",
+                        alerts_path=path)
+        return path
+
+    def test_arrival_becomes_the_headline(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self._setup(d)
+            got = ic.attach_on_scene(
+                talkgroup=151325, talkgroup_name="NEU West", system="fire",
+                when_iso="2026-09-29T12:08:00", rel="fire/b.wav",
+                text="Engine 2351 on scene, two vehicles, one on its roof, one trapped",
+                alerts_path=path)
+            self.assertIsNotNone(got)
+            a = __import__("json").loads(path.read_text())["alerts"][0]
+            self.assertIn("one on its roof", a["headline"]["text"])
+            self.assertEqual(a["calls"], 2)
+            # A second arrival does not replace the first size-up.
+            self.assertIsNone(ic.attach_on_scene(
+                talkgroup=151325, talkgroup_name="NEU West", system="fire",
+                when_iso="2026-09-29T12:09:00", rel="fire/c.wav",
+                text="Medic 142 on scene", alerts_path=path))
+
+    def test_unrelated_arrival_stays_out(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self._setup(d)
+            for when, text, tg in (
+                ("2026-09-29T12:05:00", "Engine 86 on scene, smoke check, nothing found", 151325),
+                ("2026-09-29T12:05:00", "Engine 2351 on scene", 154355),
+                ("2026-09-29T12:45:00", "Engine 2351 on scene", 151325),
+            ):
+                with self.subTest(text=text, tg=tg):
+                    self.assertIsNone(ic.attach_on_scene(
+                        talkgroup=tg, talkgroup_name="x", system="fire",
+                        when_iso=when, rel="", text=text, alerts_path=path))
+
+
 if __name__ == "__main__":
     unittest.main()

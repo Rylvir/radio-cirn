@@ -304,6 +304,53 @@ def location_tokens(text: str) -> set:
     return out
 
 
+# The first unit's arrival report confirms the dispatch and sizes it up,
+# so it becomes the alert's headline. "First unit at scene, IC on TAC 9"
+# is CAL FIRE's dispatch template, not an arrival.
+_ON_SCENE = re.compile(
+    r"\b(on scene|at scene|on-scene|on location|arrived|size[- ]?up|10-?97|"
+    r"show(?:ing)? (?:me|us) 97|(?:i'm|we're|i am|we are|is|are) 97|97 on)\b"
+)
+_ON_SCENE_NOT = re.compile(
+    r"\b(?:first (?:unit|engine|arriving)[\w\s]{0,12}|not|not yet|eta(?: to)?|"
+    r"until|prior to|before|when|once|upon)\s*$"
+)
+_UNIT = re.compile(
+    r"\b(?:engine|medic|battalion|truck|rescue|squad|ambulance|amr|ma|mr|"
+    r"copter|helicopter|dozer|tender|water tender|patrol|utility|brush|"
+    r"quint|air attack|tanker)\s*-?\s*(\d{1,4}(?:[\s-]\d{1,3})?)\b"
+)
+
+
+# Someone has to be arriving: a unit or callsign ("engine 2351", "r134",
+# "battalion 12") or a first person just before the phrase. "Extinguisher
+# used at scene" is a bystander, not an arrival.
+_ARRIVER = re.compile(
+    r"(?:\b[a-z]{0,3}\s?-?\d{1,4}(?:-\d{1,3})?|\b(?:i'm|im|i am|we're|we are|"
+    r"you're|you are|units?|ic|crews?|battalion|engine|medic|truck))\W+"
+    r"(?:\w+\W+){0,2}$"
+)
+
+
+def on_scene(text: str):
+    """The arrival wording in a transcript, or None."""
+    t = normalize(text)
+    for m in _ON_SCENE.finditer(t):
+        before = t[max(0, m.start() - 30):m.start()]
+        if _ON_SCENE_NOT.search(before):
+            continue
+        if m.group(0) in ("on scene", "at scene", "on-scene", "on location", "arrived") \
+                and before.strip() and not _ARRIVER.search(before):
+            continue
+        return m.group(0)
+    return None
+
+
+def unit_ids(text: str) -> set:
+    """Unit numbers named in a call ("engine 2351", "medic 142" -> 2351, 142)."""
+    return {re.sub(r"[\s-]", "", m.group(1)) for m in _UNIT.finditer(normalize(text))}
+
+
 def location_key(text: str):
     t = normalize(text)
     m = _LOC_STREET.search(t)
@@ -454,6 +501,9 @@ def _apply_merge(prev: dict, new: dict):
         tgs.append(new["talkgroup"])
     prev["talkgroups"] = tgs
     prev["log"] = (list(prev.get("log") or []) + list(new.get("log") or []))[-LOG_CAP:]
+    if new.get("headline") and not prev.get("headline"):
+        prev["headline"] = new["headline"]
+        new["first_on_scene"] = True
     prev["loc_tokens"] = sorted(_tokens_of(prev) | _tokens_of(new))
     prev["updated"] = new["updated"]
     prev["text"] = new["text"]
@@ -537,6 +587,72 @@ def _write_atomic(path: Path, payload: dict):
     os.replace(tmp, path)
 
 
+def _log_entry(when, channel, talkgroup, rel, evidence, text):
+    return {
+        "time": when,
+        "channel": channel or "",
+        "talkgroup": talkgroup,
+        "rel": rel or "",
+        "evidence": evidence,
+        "text": text[:300],
+        "on_scene": bool(on_scene(text)),
+    }
+
+
+def _locked_update(path: Path, fn):
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+") as lock:
+        import fcntl
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            data = _load(path)
+            result = fn(data)
+            _write_atomic(path, data)
+            return result
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def attach_on_scene(*, talkgroup, talkgroup_name, system, when_iso, rel,
+                    text, alerts_path=None):
+    """Fold a routine arrival report into the open alert it belongs to.
+
+    Only when this is the first arrival for an alert open on the same
+    channel within MERGE_SAME_TG_SEC, and the report shares a unit number
+    or place with that alert. Returns the updated alert, or None.
+    """
+    if not on_scene(text):
+        return None
+    path = Path(alerts_path) if alerts_path else ALERTS_PATH
+    text = re.sub(r"\s+", " ", (text or "")).strip()
+    now = when_iso or datetime.now().isoformat(timespec="seconds")
+    units, places = unit_ids(text), location_tokens(text)
+
+    def apply(data):
+        t_new = _epoch(now)
+        for a in reversed(data["alerts"]):
+            if a.get("headline") or a.get("category") == "foresthill":
+                continue
+            tgs = a.get("talkgroups") or [a.get("talkgroup")]
+            if a.get("system") != system or talkgroup not in tgs:
+                continue
+            if not 0 <= t_new - _epoch(a.get("updated") or a.get("started")) <= MERGE_SAME_TG_SEC:
+                continue
+            seen = " ".join(e.get("text") or "" for e in a.get("log") or []) or a.get("text") or ""
+            if not (units & unit_ids(seen) or places & _tokens_of(a)):
+                continue
+            entry = _log_entry(now, talkgroup_name, talkgroup, rel, "on scene", text)
+            a["log"] = (list(a.get("log") or []) + [entry])[-LOG_CAP:]
+            a["headline"] = dict(entry)
+            a["calls"] = int(a.get("calls") or 1) + 1
+            a["updated"] = now
+            return dict(a)
+        return None
+
+    return _locked_update(path, apply)
+
+
 def record_alert(hit: dict, *, talkgroup, talkgroup_name, system, when_iso,
                  rel, text, alerts_path=None) -> dict:
     """Merge one classified call into the alerts file.
@@ -569,32 +685,23 @@ def record_alert(hit: dict, *, talkgroup, talkgroup_name, system, when_iso,
         "channels": [talkgroup_name] if talkgroup_name else [],
         "talkgroups": [talkgroup] if talkgroup is not None else [],
         # One entry per transmission folded into this alert.
-        "log": [{
-            "time": now,
-            "channel": talkgroup_name or "",
-            "talkgroup": talkgroup,
-            "rel": rel or "",
-            "evidence": hit.get("evidence") or "",
-            "text": text[:300],
-        }],
+        "log": [_log_entry(now, talkgroup_name, talkgroup, rel,
+                           hit.get("evidence") or "", text)],
     }
+    if new["log"][0]["on_scene"]:
+        new["headline"] = dict(new["log"][0])
+        new["first_on_scene"] = True
     if hit.get("place"):
         new["place"] = hit["place"]
-    lock_path = path.with_suffix(path.suffix + ".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "a+") as lock:
-        import fcntl
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        try:
-            data = _load(path)
-            data["alerts"] = merge_alert(data["alerts"], new)
-            if new.get("merged_into"):
-                for a in data["alerts"]:
-                    if a.get("id") == new["merged_into"]:
-                        new["channels"] = list(a.get("channels") or [])
-                        new["calls"] = a.get("calls") or 1
-                        break
-            _write_atomic(path, data)
-        finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
+    def apply(data):
+        data["alerts"] = merge_alert(data["alerts"], new)
+        if new.get("merged_into"):
+            for a in data["alerts"]:
+                if a.get("id") == new["merged_into"]:
+                    new["channels"] = list(a.get("channels") or [])
+                    new["calls"] = a.get("calls") or 1
+                    new["headline"] = a.get("headline")
+                    break
+
+    _locked_update(path, apply)
     return new
