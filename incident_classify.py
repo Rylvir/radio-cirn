@@ -130,7 +130,13 @@ _BRUSH_MAJOR = re.compile(
 _OTHER_OBJECT = re.compile(
     r"\b((?:vehicle|car|truck|auto|rv|semi|dumpster|pallet|rubbish|trash|garbage) fire|"
     r"dumpster|pallet fire|rubbish fire|trash fire|"
-    r"unknown (?:type )?fire|fire of unknown origin)\b"
+    r"unknown (?:type )?fire|fire of unknown origin|"
+    # "fully involved passenger vehicle", "engine compartment",
+    # "vehicle looks 99% extinguished"
+    r"(?:passenger|commercial) vehicle|engine compartment|"
+    r"fully involved (?:\w+ )?(?:vehicle|car|pickup|suv|van|motorhome|semi|big rig)|"
+    r"(?:vehicle|car|pickup|suv|van|motorhome) (?:is |was |looks )?"
+    r"(?:fully involved|on fire|extinguished|\d+ ?% extinguished))\b"
 )
 # Foresthill as Whisper actually writes it in radio_calls.db: "Forest Hill",
 # "Forrest Hill Road", "Forest Hills", "forest hillside" (the bridge),
@@ -178,9 +184,15 @@ _FORESTHILL_EVENT = re.compile(
     r"hazmat|power ?lines? down|wires? down|evacuat\w*"
     r")\b"
 )
+# A fire is only called a Structure Fire on structure wording. With none,
+# it is an Other Fire (which covers unknown) rather than a guess.
 _STRUCTURE_OBJECT = re.compile(
     r"\b(structure fire|house fire|building fire|apartment fire|"
-    r"residential fire|commercial fire|dwelling fire)\b"
+    r"residential fire|commercial fire|dwelling fire|"
+    r"structure(?!s? (?:protection|defense|threatened|group))|"
+    r"house|home|residence|residential|dwelling|building|apartment|"
+    r"garage|barn|shed|attic|mobile home|"
+    r"(?:multiple|second|third|fourth|2nd|3rd|4th|two|three|four) alarm)\b"
 )
 _LOC_STREET = re.compile(
     r"\b(\d{2,5})\s+([a-z]+(?:\s+[a-z]+)?)\s+"
@@ -410,11 +422,13 @@ def _classify_major(t: str):
 
     other = _mentioned(t, _OTHER_OBJECT)
     structure = _mentioned(t, _STRUCTURE_OBJECT)
-    if other and not structure:
+    if structure:
+        return _hit("structure_fire", severity)
+    if other:
         return _hit("other_fire", severity)
-    if brush and not structure:
+    if brush:
         return None
-    return _hit("structure_fire", severity)
+    return _hit("other_fire", severity)
 
 
 def _epoch(iso: str) -> float:

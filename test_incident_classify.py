@@ -30,6 +30,35 @@ class ClassifyTests(unittest.TestCase):
         hit = ic.classify("vehicle fire, smoke showing, highway 80")
         self.assertEqual(hit["category"], "other_fire")
 
+    def test_vehicle_fires_from_2026_09_29(self):
+        for text in (
+            "Reported as a fully involved passenger vehicle and reported "
+            "extinguisher used at scene and now no flames but heavy smoke 1335.",
+            "Fully involved engine compartment. Actually looks like fire's "
+            "knocked down now. Negative extension to the wild end.",
+            "I can hear a fire showing 97. Vehicle looks 99% extinguished.",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(ic.classify(text)["category"], "other_fire")
+
+    def test_fire_with_no_object_is_other_not_structure(self):
+        hit = ic.classify("we'll fire with threat to vegetation, report of fully involved.")
+        self.assertEqual(hit["category"], "other_fire")
+
+    def test_structure_words(self):
+        for text in (
+            "Workout fire structure fully involved. Power line still down.",
+            "working fire, single story residence",
+            "garage fully involved, smoke showing",
+            "vehicle fire extending into the garage, fully involved",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(ic.classify(text)["category"], "structure_fire")
+
+    def test_structure_protection_is_not_a_structure_fire(self):
+        hit = ic.classify("vehicle fire fully involved, structure protection on the hill")
+        self.assertEqual(hit["category"], "other_fire")
+
     def test_dumpster_without_severity(self):
         self.assertIsNone(ic.classify("dumpster fire, nothing showing"))
 
