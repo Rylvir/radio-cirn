@@ -96,7 +96,15 @@ _TECH = re.compile(
     r"high angle|swift\s?water|rope rescue)\b"
 )
 _MVA_STRONG = re.compile(
-    r"\b(roll[\s-]?over|extrication|ejected|entrapp?ed)\b"
+    r"\b(roll[\s-]?over|extrication|entrapp?ed)\b"
+)
+# "ejected" alone is not enough: "Paul 21, area check" was heard as "Hall
+# 21, you're ejected". It counts with a crash around it.
+_EJECTED = re.compile(r"\bejected\b")
+_CRASH_CTX = re.compile(
+    r"\b(vehicle|vehicles|car|truck|motorcycle|collision|accident|crash|"
+    r"wreck|tc|mva|roll[\s-]?over|highway|hwy|freeway|interstate|roadway|"
+    r"lanes?|versus|driver|passenger|11-?8[0-3])\b"
 )
 _MVA_CONTEXT = re.compile(
     r"\b(traffic collision|\btc\b|vehicle accident|injury accident|"
@@ -217,6 +225,18 @@ def categories_public():
     ]
 
 
+# Decoder hints. Place and unit words only: severity words (extrication,
+# smoke showing) got copied onto routine calls and tripped the alert rules,
+# and "foresthill" got tacked onto garbled audio as "lincoln forest hill".
+FIRE_HOTWORDS = (
+    "battalion engine truck auburn lincoln roseville placer nevada "
+    "el dorado miller sacramento"
+)
+# Law adds the call-sign words and the phrase Whisper kept mishearing:
+# "Paul 21, area check" came out as "Hall 21, you're ejected" (an MVA alert)
+# until these were hinted, after which it transcribed exactly.
+LAW_HOTWORDS = FIRE_HOTWORDS + " paul boy sam henry charlie robert king union area check"
+
 # Whisper sometimes appends the hotword list to a real transmission.
 _HOTWORD_ECHO = re.compile(
     r"\b(?:lincoln miller roseville|smoke showing working fire extrication|"
@@ -225,26 +245,31 @@ _HOTWORD_ECHO = re.compile(
 )
 
 
-# Words in watch_transcribe.HOTWORDS, plus the retired hint "foresthill"
-# from when it was a hint: Whisper echoes a partial tail of the list
-# ("placer nevada el dorado miller sacramento", "lincoln forest hill").
-_HOTWORD_WORDS = frozenset(
-    "battalion engine truck auburn lincoln roseville placer nevada "
-    "el dorado miller sacramento foresthill".split()
-)
+# An echo is a tail of the hint list *in list order* ("placer nevada el
+# dorado miller sacramento"). Order matters: PCSO reads plates with the
+# same call-sign words ("Union Boy Henry"), and those must survive.
+_HOTWORD_LISTS = [FIRE_HOTWORDS.split(), LAW_HOTWORDS.split()]
 _ECHO_MIN_WORDS = 3
+
+
+def _echo_len(words):
+    plain = [re.sub(r"[^a-z]", "", w.lower()) for w in words]
+    best = 0
+    for hot in _HOTWORD_LISTS:
+        for k in range(min(len(plain), len(hot)), _ECHO_MIN_WORDS - 1, -1):
+            tail = plain[-k:]
+            if any(hot[i:i + k] == tail for i in range(len(hot) - k + 1)):
+                best = max(best, k)
+                break
+    return best
 
 
 def strip_prompt_echo(text: str) -> str:
     """Drop a trailing copy of the decoder hint list, if Whisper appended one."""
     text = _HOTWORD_ECHO.sub("", text or "").strip()
     words = text.split()
-    run = 0
-    for w in reversed(words):
-        if re.sub(r"[^a-z]", "", w.lower()) not in _HOTWORD_WORDS:
-            break
-        run += 1
-    if run >= _ECHO_MIN_WORDS:
+    run = _echo_len(words)
+    if run:
         text = " ".join(words[:-run])
     return text
 
@@ -496,6 +521,8 @@ def _classify_major(t: str):
         return _hit("technical_rescue", _mentioned(t, _TECH))
 
     mva = _mentioned(t, _MVA_STRONG) or _mentioned(t, _MVA_MAJOR)
+    if not mva and _mentioned(t, _EJECTED) and _CRASH_CTX.search(t):
+        mva = "ejected"
     if not mva and _mentioned(t, _HIGH_LEVEL) and _mentioned(t, _CRASH_WORD):
         mva = "high level " + _mentioned(t, _CRASH_WORD)
     if not mva and _mentioned(t, _MVA_CONTEXT) and _mentioned(t, _MVA_EXTRA):

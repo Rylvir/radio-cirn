@@ -32,8 +32,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import notify
-from incident_classify import (classify, follow_up, record_alert,
-                               strip_prompt_echo)
+from incident_classify import (FIRE_HOTWORDS, LAW_HOTWORDS, classify,
+                               follow_up, record_alert, strip_prompt_echo)
 from radio_numbers import spoken_numbers_to_digits
 
 FIRE_DIR = Path("/home/scribe/trunk-build/fire")
@@ -69,17 +69,8 @@ MODEL_SIZE = "medium"
 INITIAL_PROMPT = "Fire and police dispatch in Placer County, California."
 # Hotwords bias the decoder toward local radio vocabulary without being
 # written into the transcript the way a long initial prompt often is.
-# Keep incident_classify._HOTWORD_WORDS in sync with this list.
-# Place and unit words only. Severity words (extrication, smoke showing,
-# working fire) used to be here and Whisper copied them onto routine calls,
-# which then tripped the alert rules. "foresthill" was tried here too and
-# Whisper tacked "lincoln forest hill" onto a garbled "down staffed" on
-# Nevada, a false Foresthill alert. The matcher reads "forest hill" fine
-# without the hint, so place names that raise alerts stay out.
-HOTWORDS = (
-    "battalion engine truck auburn lincoln roseville placer nevada "
-    "el dorado miller sacramento"
-)
+# The lists live in incident_classify so the echo stripper knows them.
+HOTWORDS = {"fire": FIRE_HOTWORDS, "cirn": LAW_HOTWORDS}
 
 log = logging.getLogger("watch_transcribe")
 
@@ -249,7 +240,7 @@ def rel_of(wav: Path) -> str:
     return text
 
 
-def _transcribe(model, wav: Path, vad: bool) -> str:
+def _transcribe(model, wav: Path, vad: bool, sysname: str = "fire") -> str:
     segments, _info = model.transcribe(
         str(wav),
         beam_size=5,
@@ -257,20 +248,20 @@ def _transcribe(model, wav: Path, vad: bool) -> str:
         temperature=0.0,
         condition_on_previous_text=False,
         initial_prompt=INITIAL_PROMPT,
-        hotwords=HOTWORDS,
+        hotwords=HOTWORDS.get(sysname, FIRE_HOTWORDS),
         vad_filter=vad,
         vad_parameters=dict(min_silence_duration_ms=500),
     )
     return " ".join(seg.text for seg in segments).strip()
 
 
-def transcribe_wav(model, wav: Path) -> str:
-    text = _transcribe(model, wav, vad=True)
+def transcribe_wav(model, wav: Path, sysname: str = "fire") -> str:
+    text = _transcribe(model, wav, vad=True, sysname=sysname)
     if text:
         return text
     # Silero sometimes marks an entire noisy transmission as non-speech.
     log.info("empty after VAD, retrying full audio: %s", wav.name)
-    return _transcribe(model, wav, vad=False)
+    return _transcribe(model, wav, vad=False, sysname=sysname)
 
 
 def consider(wav: Path, seen: dict):
@@ -309,7 +300,7 @@ def process(model, conn, wav: Path, seen: dict) -> str:
     if meta.get("talkgroup_tag") and sysname == "cirn":
         name = meta.get("talkgroup_tag") or name
     try:
-        text = strip_prompt_echo(transcribe_wav(model, wav))
+        text = strip_prompt_echo(transcribe_wav(model, wav, sysname))
         # "Engine twenty-three sixty-three" -> "Engine 2363", so search and
         # unit following see the ID the way Whisper usually writes it.
         text = spoken_numbers_to_digits(text)

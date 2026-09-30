@@ -228,16 +228,32 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(hit.get("place"), "foresthill")
         self.assertIsNone(ic.classify("structure fire, smoke showing").get("place"))
 
-    def test_partial_hotword_echo_is_not_foresthill(self):
-        text = "Beep. Beep. auburn lincoln roseville placer nevada el dorado miller sacramento foresthill"
-        self.assertIsNone(ic.classify(text))
+    def test_partial_hotword_echo_is_stripped(self):
+        text = "Beep. Beep. auburn lincoln roseville placer nevada el dorado miller sacramento"
         self.assertEqual(ic.strip_prompt_echo(text), "Beep. Beep.")
+        law = "Copy. henry charlie robert king union area check"
+        self.assertEqual(ic.strip_prompt_echo(law), "Copy.")
+
+    def test_plate_read_with_call_sign_words_is_kept(self):
+        for text in ("13 Charlie, 11-26, Gordon Union Boy Henry",
+                     "clear and valid, Robert Sam Paul",
+                     "Paul 21, area check"):
+            with self.subTest(text=text):
+                self.assertEqual(ic.strip_prompt_echo(text), text)
+
+    def test_ejected_needs_a_crash(self):
+        self.assertIsNone(ic.classify("Hall 21, you're ejected. Copy that."))
+        self.assertIsNone(ic.classify("subject was ejected from the casino"))
+        hit = ic.classify("one ejected, rollover on 80")
+        self.assertEqual(hit["category"], "motor_vehicle_accident")
+        hit = ic.classify("vehicle versus tree, driver ejected")
+        self.assertEqual(hit["evidence"], "ejected")
 
     def test_foresthill_is_not_a_decoder_hint(self):
         # A hint word gets echoed onto garbled audio: "Grass up, lincoln
         # forest hill" on Nevada, 2026-09-28. Alerting words stay out.
-        import watch_transcribe
-        self.assertNotIn("forest", watch_transcribe.HOTWORDS)
+        for hot in ic._HOTWORD_LISTS:
+            self.assertNotIn("foresthill", hot)
 
     def test_foresthill_at_the_end_of_a_real_call_is_kept(self):
         hit = ic.classify("Engine 16, respond traffic collision, Auburn, Foresthill")
