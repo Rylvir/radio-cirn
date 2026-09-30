@@ -4,3 +4,7 @@ __pycache__/
 *.log
 *.tmp
 *.lock
+# transcripts live on this machine only
+*.db
+*.db-wal
+*.db-shm

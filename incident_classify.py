@@ -100,7 +100,7 @@ _MVA_STRONG = re.compile(
 )
 _MVA_CONTEXT = re.compile(
     r"\b(traffic collision|\btc\b|vehicle accident|injury accident|"
-    r"\bmva\b|\bcrash\b|\bwreck\b|11-80|1182)\b"
+    r"\bmva\b|\bcrash\b|\bwreck\b|11-?8[0-3])\b"
 )
 _MVA_EXTRA = re.compile(
     r"\b(major damage|multiple vehicles)\b"
@@ -165,7 +165,7 @@ _FORESTHILL_EVENT = re.compile(
     r" (?:accident|collision|crash|versus)|"
     r"accident|collision|crash|wreck|\btc\b|mva|roll ?over|"
     r"over the side|down (?:an|the) embankment|went off the road|"
-    r"11-?8[03]|118[03]|11-?79|1179|"
+    r"11-?8[0-3]|11-?79|"
     # fire (not the agency: "Foresthill Fire", "Fire Station")
     r"(?:structure|vehicle|car|vegetation|veg|brush|grass|wildland|house|"
     r"chimney|residential|commercial|dumpster|trash|debris|illegal) fire|"

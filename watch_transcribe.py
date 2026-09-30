@@ -34,6 +34,7 @@ from pathlib import Path
 import notify
 from incident_classify import (classify, follow_up, record_alert,
                                strip_prompt_echo)
+from radio_numbers import spoken_numbers_to_digits
 
 FIRE_DIR = Path("/home/scribe/trunk-build/fire")
 CIRN_DIR = Path("/home/scribe/trunk-build/cirn")
@@ -190,7 +191,11 @@ def save_state(seen: dict):
 
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
+    # WAL lets the dashboard read while a transcript is being written, and
+    # the long busy timeout keeps a slow reader from failing the commit
+    # (a failed call is marked seen and never retried).
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute('''CREATE TABLE IF NOT EXISTS calls (
                     filename TEXT UNIQUE PRIMARY KEY,
                     talkgroup INTEGER,
@@ -305,6 +310,9 @@ def process(model, conn, wav: Path, seen: dict) -> str:
         name = meta.get("talkgroup_tag") or name
     try:
         text = strip_prompt_echo(transcribe_wav(model, wav))
+        # "Engine twenty-three sixty-three" -> "Engine 2363", so search and
+        # unit following see the ID the way Whisper usually writes it.
+        text = spoken_numbers_to_digits(text)
         hit = classify(text)
         start = save_transcript(
             conn, wav, tg, name, text, meta,
