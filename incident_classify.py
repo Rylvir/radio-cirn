@@ -18,6 +18,7 @@ from pathlib import Path
 
 ALERTS_PATH = Path("/home/scribe/trunk-build/incident_alerts.json")
 ALERT_CAP = 200
+LOG_CAP = 40  # transmissions kept per alert for the dashboard timeline
 MERGE_SAME_TG_SEC = 30 * 60
 MERGE_LOCATION_SEC = 2 * 60 * 60
 # Fire and law often report the same incident in different words
@@ -447,6 +448,12 @@ def _apply_merge(prev: dict, new: dict):
     if name and name not in channels:
         channels.append(name)
     prev["channels"] = [c for c in channels if c]
+    tgs = list(prev.get("talkgroups") or
+               ([prev["talkgroup"]] if prev.get("talkgroup") is not None else []))
+    if new.get("talkgroup") is not None and new["talkgroup"] not in tgs:
+        tgs.append(new["talkgroup"])
+    prev["talkgroups"] = tgs
+    prev["log"] = (list(prev.get("log") or []) + list(new.get("log") or []))[-LOG_CAP:]
     prev["loc_tokens"] = sorted(_tokens_of(prev) | _tokens_of(new))
     prev["updated"] = new["updated"]
     prev["text"] = new["text"]
@@ -560,6 +567,16 @@ def record_alert(hit: dict, *, talkgroup, talkgroup_name, system, when_iso,
         "location": location_key(text),
         "loc_tokens": sorted(location_tokens(text)),
         "channels": [talkgroup_name] if talkgroup_name else [],
+        "talkgroups": [talkgroup] if talkgroup is not None else [],
+        # One entry per transmission folded into this alert.
+        "log": [{
+            "time": now,
+            "channel": talkgroup_name or "",
+            "talkgroup": talkgroup,
+            "rel": rel or "",
+            "evidence": hit.get("evidence") or "",
+            "text": text[:300],
+        }],
     }
     if hit.get("place"):
         new["place"] = hit["place"]

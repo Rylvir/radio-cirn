@@ -351,6 +351,7 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["calls"], 2)
         self.assertEqual(out[0]["channels"], ["NEU West", "PCSO West"])
+        self.assertEqual(out[0]["talkgroups"], [151325, 2001])
 
     def test_cross_channel_merge_when_one_side_has_no_place(self):
         out = ic.merge_alert([self._mva()],
@@ -384,6 +385,10 @@ class MergeTests(unittest.TestCase):
             data = __import__("json").loads(path.read_text())
             self.assertEqual(len(data["alerts"]), 1)
             self.assertEqual(data["alerts"][0]["calls"], 2)
+            log = data["alerts"][0]["log"]
+            self.assertEqual([e["rel"] for e in log], ["cirn/x.wav", "cirn/y.wav"])
+            self.assertEqual(log[1]["time"], "2026-09-27T18:05:00")
+            self.assertEqual(data["alerts"][0]["talkgroups"], [2001])
             self.assertEqual(len(data["categories"]), 11)
 
 
