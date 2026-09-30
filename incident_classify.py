@@ -51,7 +51,7 @@ CATEGORIES = [
     # Geographic watch on every transcribed fire and law channel.
     # A real major incident in town still keeps its own category.
     ("foresthill", "Foresthill",
-     "Any dispatch that names Foresthill", "Foresthill"),
+     "Foresthill plus a crash, fire, injury or other real event", "Foresthill"),
 ]
 
 _BY_ID = {c[0]: c for c in CATEGORIES}
@@ -145,6 +145,39 @@ _FORESTHILL = re.compile(
 # A place watch ignores the wide negation window ("negative contact,
 # en route to Foresthill"). Only "not Foresthill" / "no Foresthill" cancels.
 _PLACE_NEG = re.compile(r"\b(?:not|no|n't)\s+$")
+# "Foresthill Tow" is a towing company, not the town ("Forest Hill Toll").
+_FORESTHILL_BUSINESS = re.compile(r"^\s*(?:tow|towing|toll|toe|tows)\b")
+# Naming Foresthill is not enough; the call must also carry an event above
+# routine traffic. "AMR responding from Foresthill on I-80" stays quiet;
+# "AMR code 3 for a vehicle accident, Foresthill Rd and Mosquito Ridge"
+# alerts. Medical aids, traffic stops, and "code 3" alone are routine.
+_FORESTHILL_EVENT = re.compile(
+    r"\b("
+    # crashes
+    r"(?:vehicle|traffic|injury|motorcycle|bicycle|pedestrian|solo vehicle)"
+    r" (?:accident|collision|crash|versus)|"
+    r"accident|collision|crash|wreck|\btc\b|mva|roll ?over|"
+    r"over the side|down (?:an|the) embankment|went off the road|"
+    r"11-?8[03]|118[03]|11-?79|1179|"
+    # fire (not the agency: "Foresthill Fire", "Fire Station")
+    r"(?:structure|vehicle|car|vegetation|veg|brush|grass|wildland|house|"
+    r"chimney|residential|commercial|dumpster|trash|debris|illegal) fire|"
+    r"smoke (?:showing|investigation|check|column|in the area)|"
+    r"flames|fully involved|working fire|"
+    # people in danger
+    r"cardiac arrest|cpr|not breathing|unresponsive|unconscious|"
+    r"overdose|fatal(?:ity)?|deceased|11-?44|1144|"
+    r"trapped|entrap(?:ped|ment)|extricat\w*|ejected|"
+    r"rescue(?! (?:support )?\d)(?! support)|"
+    r"missing (?:person|hiker|juvenile|child|subject)|drowning|"
+    r"care ?flight|air ambulance|life ?flight|landing zone|\blz\b|"
+    # violence
+    r"shots? fired|shooting|gunshot|gsw|stabb(?:ing|ed)|"
+    r"(?:with a |armed with a )(?:gun|knife|weapon)|pursuit|"
+    # hazards
+    r"hazmat|power ?lines? down|wires? down|evacuat\w*"
+    r")\b"
+)
 _STRUCTURE_OBJECT = re.compile(
     r"\b(structure fire|house fire|building fire|apartment fire|"
     r"residential fire|commercial fire|dwelling fire)\b"
@@ -275,6 +308,26 @@ def foresthill_mentioned(text: str):
     for m in _FORESTHILL.finditer(text):
         if _PLACE_NEG.search(text[max(0, m.start() - 12):m.start()]):
             continue
+        if (_FORESTHILL_BUSINESS.match(text[m.end():m.end() + 10])
+                or re.search(r"hill(?:tow|toll)", m.group(0))):
+            continue
+        return m.group(0)
+    return None
+
+
+_TRAINING = re.compile(r"\b(training|drill|exercise)\b")
+# For the Foresthill event check only the words right before the event can
+# cancel it ("no smoke showing"); "negative injuries, vehicle accident" is
+# still a crash.
+_EVENT_NEG = re.compile(
+    r"\b(?:no|not|n't|negative|nothing|cancel(?:l?ed)?|disregard)\s+(?:\w+\s+)?$"
+)
+
+
+def _event_near(text: str, pattern: re.Pattern):
+    for m in pattern.finditer(text):
+        if _EVENT_NEG.search(text[max(0, m.start() - 24):m.start()]):
+            continue
         return m.group(0)
     return None
 
@@ -293,8 +346,9 @@ def classify(text: str):
     """Return a hit dict, or None when the call is not a major incident.
 
     A major incident that names Foresthill keeps its own category and
-    carries place="foresthill"; routine traffic that names it becomes a
-    "foresthill" hit.
+    carries place="foresthill". A lesser call that names Foresthill is a
+    "foresthill" hit only when it also carries a real event (a crash, a
+    fire, someone hurt); routine traffic through town stays quiet.
     """
     t = normalize(text)
     if not t:
@@ -305,10 +359,12 @@ def classify(text: str):
         if place:
             hit["place"] = "foresthill"
         return hit
-    if place:
-        hit = _hit("foresthill", place)
-        hit["place"] = "foresthill"
-        return hit
+    if place and not _TRAINING.search(t):
+        event = _event_near(t, _FORESTHILL_EVENT)
+        if event:
+            hit = _hit("foresthill", f"foresthill + {event}")
+            hit["place"] = "foresthill"
+            return hit
     return None
 
 

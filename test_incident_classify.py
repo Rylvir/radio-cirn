@@ -99,13 +99,56 @@ class ClassifyTests(unittest.TestCase):
     def test_routine_dispatch_chatter(self):
         self.assertIsNone(ic.classify("copy, show me 10-8, returning to quarters"))
 
-    def test_foresthill_on_a_routine_call(self):
-        hit = ic.classify("medical aid, 200 Main Street, Foresthill")
-        self.assertEqual(hit["category"], "foresthill")
+    def test_foresthill_on_a_routine_call_is_quiet(self):
+        for text in (
+            "medical aid, 200 Main Street, Foresthill",
+            "engine 84 is responding forest hill",
+            "MR 142 responding to Jordan Lane from Forest Hill on I-80. Copy staging.",
+            "AMR responding from Foresthill and I-80",
+            "party separated at the 4th Hill Fire Station",
+            "Engine 16 code 3, Foresthill Road",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(ic.classify(text))
 
-    def test_forest_hill_spelled_apart(self):
-        hit = ic.classify("engine 84 is responding forest hill")
-        self.assertEqual(hit["category"], "foresthill")
+    def test_foresthill_with_a_real_event_alerts(self):
+        for text, evidence in (
+            ("AMR responding code 3 for vehicle accident, Foresthill Rd and "
+             "Mosquito Ridge", "vehicle accident"),
+            ("traffic collision, Foresthill Road at Bowman", "traffic collision"),
+            ("small vegetation fire, Foresthill", "vegetation fire"),
+            ("Foresthill, male not breathing, CPR in progress", "not breathing"),
+            ("male stabbed, Michigan Bluff and Forrest Hill Road", "stabbed"),
+            ("landing zone at Foresthill High School for Care Flight", "landing zone"),
+        ):
+            with self.subTest(text=text):
+                hit = ic.classify(text)
+                self.assertEqual(hit["category"], "foresthill")
+                self.assertEqual(hit["evidence"], f"foresthill + {evidence}")
+
+    def test_foresthill_unit_names_and_training_are_quiet(self):
+        for text in (
+            "Forest Hill IC, Grass Valley. Rescue 71 is making their way out to the pavement.",
+            "Forest Hill IC. Rescue support 71's release will be coming up available shortly.",
+            "East Coast 97, Forest Hill, Sunset LZ, training with Forest Hill Fireplace.",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(ic.classify(text))
+        hit = ic.classify("water rescue, Forest Hill, subject in the river")
+        self.assertEqual(hit["evidence"], "foresthill + rescue")
+
+    def test_foresthill_negated_event_is_quiet(self):
+        self.assertIsNone(ic.classify("Foresthill Road, no smoke showing, no fire"))
+        self.assertIsNone(ic.classify("cancel the vehicle accident, Foresthill"))
+
+    def test_foresthill_tow_company_is_not_the_town(self):
+        for text in (
+            "10-39 Forest Hill Toll, they're en route, ETA about 20 minutes. vehicle accident",
+            "Foresthill Tow is en route for the collision",
+            "Forest Hilltow, ETA, 15 minutes. traffic collision",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(ic.classify(text))
 
     def test_foresthill_structure_fire_stays_a_structure_fire(self):
         hit = ic.classify("structure fire, smoke showing, Foresthill Road")
@@ -119,7 +162,6 @@ class ClassifyTests(unittest.TestCase):
         for text in (
             "Henry, we're here at Michigan Bluffs and Forrest Hill Road.",
             "your subject out of Forest Hills, valid and clear",
-            "Forest Hilltow, ETA, 15 minutes.",
             "four people on the catwalk under the bridge on the forest hillside",
             "80 West at 4th Hill, okay.",
             "party separated at the 4th Hill Fire Station",
@@ -130,9 +172,7 @@ class ClassifyTests(unittest.TestCase):
             "FORESTHILL",
         ):
             with self.subTest(text=text):
-                hit = ic.classify(text)
-                self.assertIsNotNone(hit)
-                self.assertEqual(hit["category"], "foresthill")
+                self.assertTrue(ic.foresthill_mentioned(ic.normalize(text)))
 
     def test_not_foresthill_lookalikes(self):
         for text in (
@@ -146,7 +186,7 @@ class ClassifyTests(unittest.TestCase):
                 self.assertIsNone(ic.classify(text))
 
     def test_foresthill_survives_an_earlier_negation(self):
-        hit = ic.classify("negative contact, show me en route to Foresthill Road")
+        hit = ic.classify("negative injuries reported, vehicle accident, Foresthill Road")
         self.assertEqual(hit["category"], "foresthill")
 
     def test_foresthill_grass_fire_with_smoke_showing(self):
@@ -171,7 +211,7 @@ class ClassifyTests(unittest.TestCase):
         self.assertNotIn("forest", watch_transcribe.HOTWORDS)
 
     def test_foresthill_at_the_end_of_a_real_call_is_kept(self):
-        hit = ic.classify("Engine 16, respond medical aid, Auburn, Foresthill")
+        hit = ic.classify("Engine 16, respond traffic collision, Auburn, Foresthill")
         self.assertEqual(hit["category"], "foresthill")
 
     def test_major_vehicle_accident(self):

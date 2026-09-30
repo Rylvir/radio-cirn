@@ -40,9 +40,9 @@ class NotifyRuleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "a.json"
             a = self._record("2026-09-28T12:00:00", 2001, "PCSO West", "cirn",
-                             "medical aid, Foresthill Road", path)
+                             "vehicle accident, Foresthill Road", path)
             b = self._record("2026-09-28T12:01:00", 2001, "PCSO West", "cirn",
-                             "traffic stop, Foresthill", path)
+                             "brush fire reported, Foresthill", path)
             self.assertTrue(notify.should_send(a) and notify.should_send(b))
             self.assertEqual(notify.build(a)[2]["Priority"], "3")
 
