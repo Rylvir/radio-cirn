@@ -304,51 +304,94 @@ def location_tokens(text: str) -> set:
     return out
 
 
-# The first unit's arrival report confirms the dispatch and sizes it up,
-# so it becomes the alert's headline. "First unit at scene, IC on TAC 9"
-# is CAL FIRE's dispatch template, not an arrival.
-_ON_SCENE = re.compile(
-    r"\b(on scene|at scene|on-scene|on location|arrived|size[- ]?up|10-?97|"
-    r"show(?:ing)? (?:me|us) 97|(?:i'm|we're|i am|we are|is|are) 97|97 on)\b"
+# A confirmation follows the dispatch and says what crews actually found:
+# a unit "arrived", a conditions report ("report on conditions", "as
+# described", "can handle"), or an air resource sizing it up. It is shown
+# under the dispatch, never instead of it. Wording from CAL FIRE clear-text
+# procedures; "at scene"/"on scene" are left out on purpose (the dispatch
+# template itself says "first unit at scene").
+_CONFIRM = re.compile(
+    r"\b(arrived|report on conditions|conditions report|as described|"
+    r"can handle|under control|knock(?:ed)? ?down|size[- ]?up|10-?97|"
+    r"(?:i'm|we're|i am|we are|is|are) 97)\b"
 )
-_ON_SCENE_NOT = re.compile(
-    r"\b(?:first (?:unit|engine|arriving)[\w\s]{0,12}|not|not yet|eta(?: to)?|"
-    r"until|prior to|before|when|once|upon)\s*$"
+_CONFIRM_NOT = re.compile(
+    r"\b(?:not|not yet|eta|until|prior to|before|when|once|upon|if)\s+(?:\w+\s+){0,2}$"
 )
+# "Air Attack 230 ... the blue incident, fire does not appear to have spread
+# into the vegetation, we do have a box of retardant around it".
+_AIR_UNIT = re.compile(
+    r"\b(?:air attack|air recon|copter|helicopter|helitanker|tanker)\s*-?\s*\d"
+)
+_AIR_REPORT = re.compile(
+    r"\b(does not appear|doesn't appear|appears to|acres?|spread|retardant|"
+    r"forward progress|holding|column|running|spotting|contained)\b"
+)
+# CAL FIRE radio identifiers: descriptive indicator + number ("Engine 2373",
+# "Dozer 2340", "Water Tender 198", "HT 2460"), plus local ambulance calls.
 _UNIT = re.compile(
-    r"\b(?:engine|medic|battalion|truck|rescue|squad|ambulance|amr|ma|mr|"
-    r"copter|helicopter|dozer|tender|water tender|patrol|utility|brush|"
-    r"quint|air attack|tanker)\s*-?\s*(\d{1,4}(?:[\s-]\d{1,3})?)\b"
+    r"\b(?:engine|medic(?: engine| truck| squad)?|battalion|truck|rescue|squad|"
+    r"ambulance|amr|ma|mr|copter|helicopter|helitack|helitanker|helitender|"
+    r"dozer(?: tender)?|transport(?: dozer)?|transfer dozer|water tender|tender|"
+    r"patrol|utility|air attack|air recon|tanker|vlat|crew|division|chief|"
+    r"prevention|quint|unit|ht)\s*-?\s*(\d{1,4}(?:[\s-]\d{1,3})?(?:-\d{1,3})?)\b"
 )
+# Radio IDs said without the indicator ("2373, Grass Valley"). Only IDs of
+# three or more digits count, and only against units already dispatched.
+_BARE_ID = re.compile(r"(?<![\d.:-])(\d{2}[\s-]?\d{1,2}|\d{3})(?![\d.:])")
+# CAL FIRE names each incident and its IC: "Blue IC", "the Sutton incident".
+_INCIDENT_NAME = re.compile(r"\b([a-z]{3,})\s+(?:ic|incident)\b")
+_NAME_STOP = {
+    "the", "this", "that", "new", "same", "first", "your", "our", "and", "for",
+    "from", "with", "was", "unknown", "medical", "traffic", "vehicle", "any",
+    "each", "said", "which", "what", "their",
+}
 
 
-# Someone has to be arriving: a unit or callsign ("engine 2351", "r134",
-# "battalion 12") or a first person just before the phrase. "Extinguisher
-# used at scene" is a bystander, not an arrival.
-_ARRIVER = re.compile(
-    r"(?:\b[a-z]{0,3}\s?-?\d{1,4}(?:-\d{1,3})?|\b(?:i'm|im|i am|we're|we are|"
-    r"you're|you are|units?|ic|crews?|battalion|engine|medic|truck))\W+"
-    r"(?:\w+\W+){0,2}$"
-)
-
-
-def on_scene(text: str):
-    """The arrival wording in a transcript, or None."""
+def confirmation(text: str):
+    """The confirming wording in a follow-up call, or None."""
     t = normalize(text)
-    for m in _ON_SCENE.finditer(t):
-        before = t[max(0, m.start() - 30):m.start()]
-        if _ON_SCENE_NOT.search(before):
-            continue
-        if m.group(0) in ("on scene", "at scene", "on-scene", "on location", "arrived") \
-                and before.strip() and not _ARRIVER.search(before):
+    for m in _CONFIRM.finditer(t):
+        if _CONFIRM_NOT.search(t[max(0, m.start() - 30):m.start()]):
             continue
         return m.group(0)
+    if _AIR_UNIT.search(t) and _mentioned(t, _AIR_REPORT):
+        return "air report"
     return None
 
 
 def unit_ids(text: str) -> set:
-    """Unit numbers named in a call ("engine 2351", "medic 142" -> 2351, 142)."""
-    return {re.sub(r"[\s-]", "", m.group(1)) for m in _UNIT.finditer(normalize(text))}
+    """Radio IDs named with an indicator ("engine 23-73", "medic 142" -> 2373, 142)."""
+    out = set()
+    for m in _UNIT.finditer(normalize(text)):
+        uid = re.sub(r"[\s-]", "", m.group(1))
+        if len(uid) >= 2:
+            out.add(uid)
+    return out
+
+
+def ids_heard(text: str) -> set:
+    """Every radio ID in a call, with or without its indicator."""
+    t = normalize(text)
+    bare = {re.sub(r"[\s-]", "", m.group(1)) for m in _BARE_ID.finditer(t)}
+    return unit_ids(t) | {b for b in bare if len(b) >= 3}
+
+
+def incident_names(text: str) -> set:
+    return {m.group(1) for m in _INCIDENT_NAME.finditer(normalize(text))
+            if m.group(1) not in _NAME_STOP}
+
+
+def follows(text: str, units, names) -> list:
+    """What ties a call to an incident: dispatched IDs or its name."""
+    t = normalize(text)
+    heard, named = ids_heard(t), unit_ids(t)
+    why = [f"unit {u}" for u in sorted(set(units))
+           if u in named or (len(u) >= 3 and u in heard)]
+    for n in names:
+        if re.search(rf"\b{re.escape(n)}\s+(?:ic|incident|air attack|command|division)\b", t):
+            why.append(f"{n} incident")
+    return why
 
 
 def location_key(text: str):
@@ -501,9 +544,13 @@ def _apply_merge(prev: dict, new: dict):
         tgs.append(new["talkgroup"])
     prev["talkgroups"] = tgs
     prev["log"] = (list(prev.get("log") or []) + list(new.get("log") or []))[-LOG_CAP:]
-    if new.get("headline") and not prev.get("headline"):
-        prev["headline"] = new["headline"]
-        new["first_on_scene"] = True
+    prev["units"] = sorted(set(prev.get("units") or []) | set(new.get("units") or []))
+    prev["incident"] = sorted(set(prev.get("incident") or []) | set(new.get("incident") or []))
+    conf = new["log"][0] if new.get("log") and new["log"][0].get("confirm") else None
+    if conf and not prev.get("confirmation"):
+        prev["confirmation"] = dict(conf)
+        new["confirmation"] = dict(conf)
+        new["first_confirmation"] = True
     prev["loc_tokens"] = sorted(_tokens_of(prev) | _tokens_of(new))
     prev["updated"] = new["updated"]
     prev["text"] = new["text"]
@@ -595,7 +642,7 @@ def _log_entry(when, channel, talkgroup, rel, evidence, text):
         "rel": rel or "",
         "evidence": evidence,
         "text": text[:300],
-        "on_scene": bool(on_scene(text)),
+        "confirm": confirmation(text) or "",
     }
 
 
@@ -614,41 +661,50 @@ def _locked_update(path: Path, fn):
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
-def attach_on_scene(*, talkgroup, talkgroup_name, system, when_iso, rel,
-                    text, alerts_path=None):
-    """Fold a routine arrival report into the open alert it belongs to.
+FOLLOW_SEC = 60 * 60  # an incident is followed this long after its last traffic
 
-    Only when this is the first arrival for an alert open on the same
-    channel within MERGE_SAME_TG_SEC, and the report shares a unit number
-    or place with that alert. Returns the updated alert, or None.
+
+def follow_up(*, talkgroup, talkgroup_name, system, when_iso, rel, text,
+              alerts_path=None):
+    """Tie a routine call to the open incident whose units or name it uses.
+
+    Learns incident names ("Blue IC") and counts follow-up traffic. The
+    first follow-up that confirms the dispatch (arrived, conditions report,
+    air attack size-up) becomes the alert's confirmation. Returns
+    (alert, is_first_confirmation), or (None, False).
     """
-    if not on_scene(text):
-        return None
     path = Path(alerts_path) if alerts_path else ALERTS_PATH
     text = re.sub(r"\s+", " ", (text or "")).strip()
+    if not text:
+        return None, False
     now = when_iso or datetime.now().isoformat(timespec="seconds")
-    units, places = unit_ids(text), location_tokens(text)
+    conf = confirmation(text)
 
     def apply(data):
         t_new = _epoch(now)
         for a in reversed(data["alerts"]):
-            if a.get("headline") or a.get("category") == "foresthill":
+            # Fire traffic follows fire incidents, law follows law; bare radio
+            # IDs repeat across agencies ("Placer Alpha 129" vs Battalion 129).
+            if a.get("category") == "foresthill" or a.get("system") != system:
                 continue
-            tgs = a.get("talkgroups") or [a.get("talkgroup")]
-            if a.get("system") != system or talkgroup not in tgs:
+            last = max(_epoch(a.get("updated") or a.get("started")),
+                       _epoch(a.get("last_traffic") or a.get("updated") or a.get("started")))
+            if not 0 <= t_new - last <= FOLLOW_SEC:
                 continue
-            if not 0 <= t_new - _epoch(a.get("updated") or a.get("started")) <= MERGE_SAME_TG_SEC:
+            why = follows(text, a.get("units") or [], a.get("incident") or [])
+            if not why:
                 continue
-            seen = " ".join(e.get("text") or "" for e in a.get("log") or []) or a.get("text") or ""
-            if not (units & unit_ids(seen) or places & _tokens_of(a)):
-                continue
-            entry = _log_entry(now, talkgroup_name, talkgroup, rel, "on scene", text)
-            a["log"] = (list(a.get("log") or []) + [entry])[-LOG_CAP:]
-            a["headline"] = dict(entry)
-            a["calls"] = int(a.get("calls") or 1) + 1
-            a["updated"] = now
-            return dict(a)
-        return None
+            a["last_traffic"] = now
+            a["followups"] = int(a.get("followups") or 0) + 1
+            a["incident"] = sorted(set(a.get("incident") or []) | incident_names(text))
+            first = False
+            if conf and not a.get("confirmation"):
+                entry = _log_entry(now, talkgroup_name, talkgroup, rel, conf, text)
+                entry["why"] = why
+                a["confirmation"] = entry
+                first = True
+            return dict(a), first
+        return None, False
 
     return _locked_update(path, apply)
 
@@ -688,9 +744,10 @@ def record_alert(hit: dict, *, talkgroup, talkgroup_name, system, when_iso,
         "log": [_log_entry(now, talkgroup_name, talkgroup, rel,
                            hit.get("evidence") or "", text)],
     }
-    if new["log"][0]["on_scene"]:
-        new["headline"] = dict(new["log"][0])
-        new["first_on_scene"] = True
+    # Units dispatched and the incident name are how later traffic is tied
+    # back to this alert. The first call is the dispatch, not a confirmation.
+    new["units"] = sorted(unit_ids(text))
+    new["incident"] = sorted(incident_names(text))
     if hit.get("place"):
         new["place"] = hit["place"]
     def apply(data):
@@ -700,7 +757,8 @@ def record_alert(hit: dict, *, talkgroup, talkgroup_name, system, when_iso,
                 if a.get("id") == new["merged_into"]:
                     new["channels"] = list(a.get("channels") or [])
                     new["calls"] = a.get("calls") or 1
-                    new["headline"] = a.get("headline")
+                    if not new.get("first_confirmation"):
+                        new["confirmation"] = a.get("confirmation")
                     break
 
     _locked_update(path, apply)

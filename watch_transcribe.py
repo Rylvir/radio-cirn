@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import notify
-from incident_classify import (attach_on_scene, classify, record_alert,
+from incident_classify import (classify, follow_up, record_alert,
                                strip_prompt_echo)
 
 FIRE_DIR = Path("/home/scribe/trunk-build/fire")
@@ -330,21 +330,23 @@ def process(model, conn, wav: Path, seen: dict) -> str:
         log.info("ALERT %s (%s) ← %s | %s",
                  hit["category"], hit["evidence"], wav.name, text[:140])
         notify.send(record)
-        if record.get("merged_into") and record.get("first_on_scene"):
-            notify.send_on_scene(record)
+        if record.get("first_confirmation"):
+            notify.send_confirmation(record)
         return "alert"
     try:
-        joined = attach_on_scene(
+        followed, confirmed = follow_up(
             talkgroup=tg, talkgroup_name=name, system=sysname,
             when_iso=start, rel=rel_of(wav), text=text,
         )
     except Exception:
-        log.exception("on-scene attach failed: %s", wav.name)
-        joined = None
-    if joined:
-        log.info("ON SCENE %s ← %s | %s", joined.get("category"), wav.name, text[:140])
-        notify.send_on_scene(joined)
-        return "alert"
+        log.exception("follow-up failed: %s", wav.name)
+        followed, confirmed = None, False
+    if followed:
+        log.info("%s %s ← %s | %s", "CONFIRMED" if confirmed else "follow-up",
+                 followed.get("category"), wav.name, text[:140])
+        if confirmed:
+            notify.send_confirmation(followed)
+        return "followup"
     log.info("routine %s %s: %s", tg, name, (text or "")[:100])
     return "routine"
 
@@ -432,7 +434,7 @@ def main(backfill: int = 0, once: bool = False):
                 continue
             seen[wav.name] = None
             dirty = True
-            if status in ("alert", "routine", "error"):
+            if status in ("alert", "followup", "routine", "error"):
                 save_state(seen)
                 dirty = False
         if dirty:

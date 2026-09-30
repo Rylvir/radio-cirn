@@ -392,60 +392,101 @@ class MergeTests(unittest.TestCase):
             self.assertEqual(len(data["categories"]), 11)
 
 
-class OnSceneTests(unittest.TestCase):
-    def test_on_scene_wording(self):
-        for text in ("I'm R134 on scene.", "Engine 12-82 is 97. Medic 142 is 97.",
-                     "Paul 46, we're 97 AFH.", "Battalion 12 at scene, working fire",
-                     "At scene with CHP, false alarm", "crews on scene, knockdown"):
-            with self.subTest(text=text):
-                self.assertTrue(ic.on_scene(text))
+BLUE = [  # NEU West, 2026-09-28, as transcribed
+    ("17:03:13", "DRL tanker 8-8 tanker 8-9 copter 5-1-4 copter 5 bravo tango mountain "
+     "group engine 23-73 engine 23-83 engine 23-63 engine 23-53 transport dozer 23-40 "
+     "transport dozer 23-49 water tender 198 washington ridge crew 3 port of a passenger "
+     "vehicle fire possibly fully involved latin long in the cat page be off blue canyon "
+     "road near the railroad tracks stand by for check 17-03"),
+    ("17:05:54", "A checkback is responding. Passenger vehicle fire reported fully involved "
+     "on a dirt road and near the railroad tracks. First seen is seen will be blue IC on "
+     "CDF TAC-5. Confirm response. Resources from the mountain group."),
+    ("17:12:31", "Station 10, one engine to 30. Station 20, one engine to 33."),
+    ("17:16:16", "Engine 2383, grass fight."),
+    ("17:19:14", "2373 grass valley, the unnamed road that you're on is the access road "
+     "that I'm showing. You're on a good track."),
+    ("17:22:55", "Working my way in with the alpha engine. We'll stay in the balance with "
+     "the blue canyons next to us."),
+    ("17:23:14", "Vehicle fire, threat to vegetation, blue canyon area, stage at eastbound "
+     "80 and blue canyon 17, 23. Grassoll air attack 230. Air attack 230, Grassoll. The "
+     "blue incident, fire does not appear to be spread into the vegetation, we do have a "
+     "box retardant around it, and working with the ground crews to get them in, assuming "
+     "blue air attack."),
+    ("17:23:58", "Yeah, five bravo tango's been released from the blue incident, we're "
+     "returning to Auburn, we've got ETA of 1732."),
+    ("17:29:11", "Grass Valley Unit is responding. Now commercial vehicle fire. Engine 2363 "
+     "to continue balance to cancel. Engine 2353 cover station 33."),
+]
 
-    def test_dispatch_template_is_not_an_arrival(self):
-        for text in ("First unit at scene, Highway IC on XPL, TAC 9.",
-                     "ETA to scene 10 minutes", "not on scene yet",
-                     "reported extinguisher used at scene and now no flames"):
-            with self.subTest(text=text):
-                self.assertIsNone(ic.on_scene(text))
 
-    def _setup(self, d):
+class FollowTests(unittest.TestCase):
+    def _run(self, calls):
+        d = tempfile.mkdtemp()
         path = Path(d) / "a.json"
-        hit = ic.classify("rollover with extrication, Highway 49 at Dry Creek, engine 2351, medic 142")
-        ic.record_alert(hit, talkgroup=151325, talkgroup_name="NEU West", system="fire",
-                        when_iso="2026-09-29T12:00:00", rel="fire/a.wav",
-                        text="rollover with extrication, Highway 49 at Dry Creek, engine 2351, medic 142",
-                        alerts_path=path)
-        return path
+        out = []
+        for hhmm, text in calls:
+            when = f"2026-09-28T{hhmm}"
+            hit = ic.classify(text)
+            if hit:
+                rec = ic.record_alert(hit, talkgroup=151325, talkgroup_name="NEU West",
+                                      system="fire", when_iso=when, rel=f"{hhmm}.wav",
+                                      text=text, alerts_path=path)
+                out.append((hhmm, "alert", rec.get("first_confirmation", False)))
+            else:
+                a, first = ic.follow_up(talkgroup=151325, talkgroup_name="NEU West",
+                                        system="fire", when_iso=when, rel=f"{hhmm}.wav",
+                                        text=text, alerts_path=path)
+                out.append((hhmm, "follow" if a else "routine", first))
+        return __import__("json").loads(path.read_text())["alerts"], out
 
-    def test_arrival_becomes_the_headline(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = self._setup(d)
-            got = ic.attach_on_scene(
-                talkgroup=151325, talkgroup_name="NEU West", system="fire",
-                when_iso="2026-09-29T12:08:00", rel="fire/b.wav",
-                text="Engine 2351 on scene, two vehicles, one on its roof, one trapped",
-                alerts_path=path)
-            self.assertIsNotNone(got)
-            a = __import__("json").loads(path.read_text())["alerts"][0]
-            self.assertIn("one on its roof", a["headline"]["text"])
-            self.assertEqual(a["calls"], 2)
-            # A second arrival does not replace the first size-up.
-            self.assertIsNone(ic.attach_on_scene(
-                talkgroup=151325, talkgroup_name="NEU West", system="fire",
-                when_iso="2026-09-29T12:09:00", rel="fire/c.wav",
-                text="Medic 142 on scene", alerts_path=path))
+    def test_blue_incident_is_followed_and_confirmed_by_air_attack(self):
+        alerts, out = self._run(BLUE)
+        self.assertEqual(len(alerts), 1)
+        a = alerts[0]
+        self.assertIn("2373", a["units"])
+        self.assertIn("2340", a["units"])
+        self.assertEqual(a["incident"], ["blue"])
+        # Dispatch stays the alert text source; the air attack report confirms.
+        self.assertTrue(a["log"][0]["text"].startswith("DRL tanker"))
+        self.assertIn("air attack 230", a["confirmation"]["text"].lower())
+        kinds = dict((h, k) for h, k, _f in out)
+        self.assertEqual(kinds["17:12:31"], "routine")   # station move-ups
+        self.assertEqual(kinds["17:22:55"], "routine")   # "blue canyons", not the incident
+        for h in ("17:16:16", "17:19:14", "17:23:14", "17:23:58", "17:29:11"):
+            self.assertEqual(kinds[h], "follow", h)
+        self.assertEqual([h for h, _k, f in out if f], ["17:23:14"])
 
-    def test_unrelated_arrival_stays_out(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = self._setup(d)
-            for when, text, tg in (
-                ("2026-09-29T12:05:00", "Engine 86 on scene, smoke check, nothing found", 151325),
-                ("2026-09-29T12:05:00", "Engine 2351 on scene", 154355),
-                ("2026-09-29T12:45:00", "Engine 2351 on scene", 151325),
-            ):
-                with self.subTest(text=text, tg=tg):
-                    self.assertIsNone(ic.attach_on_scene(
-                        talkgroup=tg, talkgroup_name="x", system="fire",
-                        when_iso=when, rel="", text=text, alerts_path=path))
+    def test_confirmation_wording(self):
+        for text in ("Engine 2373 arrived", "Battalion 2312, report on conditions: "
+                     "one acre, slow rate", "as described, one vehicle fully involved",
+                     "Battalion 3412 can handle with units at scene", "Medic 142 is 97"):
+            with self.subTest(text=text):
+                self.assertTrue(ic.confirmation(text))
+
+    def test_not_confirmations(self):
+        for text in ("First unit at scene, Highway IC on XPL, TAC 9.",
+                     "Engine 2373 on scene", "notify when arrived",
+                     "tanker 8-8 tanker 8-9 copter 5-1-4 respond"):
+            with self.subTest(text=text):
+                self.assertIsNone(ic.confirmation(text))
+
+    def test_hyphenated_ids(self):
+        self.assertEqual(ic.unit_ids("copter 5-1-4, engine 23-73"), {"514", "2373"})
+
+    def test_law_traffic_does_not_follow_a_fire_incident(self):
+        d = tempfile.mkdtemp(); path = Path(d) / "a.json"
+        t = "Battalion 129, engine 2351, aircraft down, Auburn airport"
+        ic.record_alert(ic.classify(t), talkgroup=151325, talkgroup_name="NEU West",
+                        system="fire", when_iso="2026-09-29T10:26:00", rel="",
+                        text=t, alerts_path=path)
+        a, _f = ic.follow_up(talkgroup=2001, talkgroup_name="PCSO West", system="cirn",
+                             when_iso="2026-09-29T10:40:00", rel="",
+                             text="Placer Alpha 129 in the mail", alerts_path=path)
+        self.assertIsNone(a)
+
+    def test_unrelated_traffic_after_an_hour_is_not_followed(self):
+        alerts, out = self._run([BLUE[0], ("18:40:00", "Engine 2383 available")])
+        self.assertEqual(out[-1][1], "routine")
 
 
 if __name__ == "__main__":

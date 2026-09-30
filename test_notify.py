@@ -51,13 +51,13 @@ class NotifyRuleTests(unittest.TestCase):
                               "place": "foresthill", "channels": ["Placer"]})[0]
         self.assertEqual(title, "Structure Fire - Placer - Foresthill")
 
-    def test_on_scene_notification(self):
-        title, body, headers = notify.build_on_scene({
-            "label": "MVA", "talkgroup_name": "NEU West",
-            "headline": {"channel": "NEU West",
-                         "text": "Engine 2351 on scene, one on its roof, one trapped"}})
-        self.assertEqual(title, "On scene: MVA - NEU West")
-        self.assertIn("one trapped", body)
+    def test_confirmation_notification(self):
+        title, body, headers = notify.build_confirmation({
+            "label": "Other Fire", "talkgroup_name": "NEU West",
+            "confirmation": {"channel": "NEU West",
+                             "text": "Air attack 230, fire does not appear to have spread"}})
+        self.assertEqual(title, "Confirmed: Other Fire - NEU West")
+        self.assertIn("does not appear", body)
         self.assertEqual(headers["Priority"], "3")
 
     def test_long_transcript_is_trimmed(self):
