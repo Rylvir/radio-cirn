@@ -39,6 +39,8 @@ CATEGORIES = [
      "Rollover / Extrication / Major Damage / Multiple Vehicles", "MVA"),
     ("shooting", "Shooting",
      "Shots fired", "Shooting"),
+    ("pursuit", "Pursuit",
+     "Vehicle or foot pursuit / failure to yield", "Pursuit"),
     ("firefighter_down", "Firefighter Down",
      "Mayday / Firefighter Down", "FF down"),
     ("building_collapse", "Building Collapse",
@@ -91,6 +93,23 @@ _SHOOTING = re.compile(
     r"shot (?:a |the )?(?:person|victim|male|female|man|woman))\b"
 )
 _SHOOTING_PAIN = re.compile(r"\bshooting\b(?:\s+\w+){0,2}\s+pain\b")
+# "CHP has a failure to yield, motorcycle over 100", "Roseville's in
+# pursuit", "westbound on foot pursuit". Dispatch asking "are you in
+# pursuit?" and "pursuit terminated" are not a pursuit; "negative pursuit"
+# and "not in pursuit" fall to the usual negation window.
+_PURSUIT = re.compile(
+    r"\b(fail(?:ure|ed|ing|s)? to yield|(?:foot|vehicle) pursuit|in pursuit|"
+    r"pursuit)\b"
+)
+_PURSUIT_NOT = re.compile(
+    r"\b(?:are (?:you|they)(?: actively| still)?(?: in)?|if (?:you're|they're|you are|they are)|"
+    r"inquire[\w\s]{0,30}|terminat\w+(?: the)?|called off(?: the)?|"
+    r"out of|broke off(?: the)?|"
+    # Whisper's "native pursuit" is "negative pursuit".
+    r"native)\s*$"
+)
+# "pursuit transport", a GPS monitor's "pursuit mode".
+_PURSUIT_AFTER = re.compile(r"^\s*(?:terminated|cancell?ed|transport|called off|mode)\b")
 _TECH = re.compile(
     r"\b(technical rescue|confined space|trench rescue|trench collapse|"
     r"high angle|swift\s?water|rope rescue)\b"
@@ -496,6 +515,17 @@ def classify(text: str):
     return None
 
 
+def _pursuit(t: str):
+    for m in _PURSUIT.finditer(t):
+        before = t[max(0, m.start() - 48):m.start()]
+        if _NEG.search(before) or _PURSUIT_NOT.search(before):
+            continue
+        if _PURSUIT_AFTER.search(t[m.end():m.end() + 16]):
+            continue
+        return m.group(0)
+    return None
+
+
 def _classify_major(t: str):
 
     if _mentioned(t, _FIREFIGHTER) or _mentioned(t, _MAYDAY_REPEAT):
@@ -516,6 +546,10 @@ def _classify_major(t: str):
     if _mentioned(t, _SHOOTING) and not _SHOOTING_PAIN.search(t):
         evidence = _mentioned(t, _SHOOTING)
         return _hit("shooting", evidence)
+
+    pursuit = _pursuit(t)
+    if pursuit:
+        return _hit("pursuit", pursuit)
 
     if _mentioned(t, _TECH):
         return _hit("technical_rescue", _mentioned(t, _TECH))

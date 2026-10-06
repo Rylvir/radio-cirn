@@ -91,6 +91,37 @@ class ClassifyTests(unittest.TestCase):
         self.assertIsNone(ic.classify(
             "Start shooting the compasser. The FBI numbers for your subject are different."))
 
+    def test_pursuit_from_real_traffic(self):
+        for text, ev in (
+            ("We advise CHP has a failure to yield. Motorcycle going over 100 "
+             "miles per hour in and out of lanes, eastbound", "failure to yield"),
+            ("information only, Roseville's in pursuit. Eastbound Pleasant Road "
+             "from Roseville Parkway.", "in pursuit"),
+            ("10-4-3 on foot pursuit, westbound.", "foot pursuit"),
+            ("Westbound, Nicholas. Confirming pursuit. Copy.", "pursuit"),
+            ("update information on CHP's pursuit. Last known location, "
+             "eastbound I-80", "pursuit"),
+        ):
+            with self.subTest(text=text):
+                hit = ic.classify(text)
+                self.assertEqual(hit["category"], "pursuit")
+                self.assertEqual(hit["evidence"], ev)
+
+    def test_not_a_pursuit(self):
+        for text in (
+            "13, Robert, negative pursuit, we're just following.",
+            "I'll be on area 6, not in pursuit. 10-4.",
+            "Paul, are you in pursuit? Negative, we've yielded right at the station.",
+            "Are they actively in pursuit or are they just watching it from the air?",
+            "can you inquire with CHP if they're in pursuit of westbound 80",
+            "No longer in pursuit. We're currently looking at Vista Drive.",
+            "pursuit terminated, all units resume normal traffic",
+            "Alpha 2K native pursuit from CHPRA PD.",
+            "He actually has a GPS monitor and I'm going to get it on pursuit mode.",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(ic.classify(text))
+
     def test_negated_shots(self):
         self.assertIsNone(ic.classify("no shots fired, just fireworks"))
 
@@ -405,7 +436,7 @@ class MergeTests(unittest.TestCase):
             self.assertEqual([e["rel"] for e in log], ["cirn/x.wav", "cirn/y.wav"])
             self.assertEqual(log[1]["time"], "2026-09-27T18:05:00")
             self.assertEqual(data["alerts"][0]["talkgroups"], [2001])
-            self.assertEqual(len(data["categories"]), 11)
+            self.assertEqual(len(data["categories"]), 12)
 
 
 BLUE = [  # NEU West, 2026-09-28, as transcribed

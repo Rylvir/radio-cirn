@@ -28,6 +28,7 @@ STYLE = {
     "mass_casualty": (5, "rotating_light,ambulance"),
     "building_collapse": (5, "rotating_light,house"),
     "shooting": (5, "rotating_light,police_car"),
+    "pursuit": (4, "police_car,dash"),
     "airport_alert": (5, "rotating_light,airplane"),
     "structure_fire": (4, "fire,house"),
     "other_fire": (4, "fire"),
