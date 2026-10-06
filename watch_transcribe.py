@@ -8,11 +8,15 @@ renumber (Air Tactics removed, Roseville added) does not mislabel them:
   151.190 El Dorado (AEU), 154.040 Roseville
 
 Law dispatch is 2001 PCSO West, 2003 PCSO East, 10201 Lincoln PD,
-10601 Auburn PD. Fire is always transcribed before law, and each pass
+10601 Auburn PD, from both PIRCS sites: trunk-recorder files a call under
+cirn/ or cirn80/ depending on which site carried it, and about one PCSO
+call in five is only on cirn80. Fire is always transcribed before law, and each pass
 takes at most one law call so PCSO traffic cannot bury a fire dispatch.
 
 Startup is quiet: recordings already on disk are seeded as seen, so a
-restart does not replay history into the alert list. --backfill N
+restart does not replay history into the alert list, and anything over
+STARTUP_MAX_AGE old that is still unseen (a long outage, a newly added
+folder) is skipped rather than queued ahead of live calls. --backfill N
 transcribes the newest N matching files anyway.
 
 One process, one model, flock on /tmp/transcribe.lock. Alerts are written
@@ -37,7 +41,9 @@ from incident_classify import (FIRE_HOTWORDS, LAW_HOTWORDS, classify,
 from radio_numbers import spoken_numbers_to_digits
 
 FIRE_DIR = Path("/home/scribe/trunk-build/fire")
-CIRN_DIR = Path("/home/scribe/trunk-build/cirn")
+CIRN_DIRS = (Path("/home/scribe/trunk-build/cirn"),
+             Path("/home/scribe/trunk-build/cirn80"))
+LAW_SYSTEMS = {d.name for d in CIRN_DIRS}
 # MHz -> name. Row numbers in fire.csv change; the frequency does not.
 FIRE_MHZ = {
     151.325: "NEU West",
@@ -65,6 +71,7 @@ DATE_DIR_DAYS = 2
 MIN_CALL_MS = 1500
 MAX_CALL_MS = 180_000
 STATE_CAP = 20000
+STARTUP_MAX_AGE = 30 * 60
 MODEL_SIZE = "medium"
 INITIAL_PROMPT = "Fire and police dispatch in Placer County, California."
 # Hotwords bias the decoder toward local radio vocabulary without being
@@ -76,7 +83,7 @@ log = logging.getLogger("watch_transcribe")
 
 
 def system_of(path: Path) -> str:
-    return "cirn" if "cirn" in path.parts else "fire"
+    return "cirn" if LAW_SYSTEMS & set(path.parts) else "fire"
 
 
 def parse_tg(name: str):
@@ -118,7 +125,7 @@ def channel_of(path: Path):
 
 def recent_wavs(days: int = DATE_DIR_DAYS):
     out = []
-    for root in (FIRE_DIR, CIRN_DIR):
+    for root in (FIRE_DIR, *CIRN_DIRS):
         if not root.exists():
             continue
         for i in range(days):
@@ -385,6 +392,13 @@ def main(backfill: int = 0, once: bool = False):
     log.info("law talkgroups: %s", sorted(LAW_TG))
     log.info("ntfy: %s", "on" if notify.enabled() else "off (set NTFY_URL)")
     seen = load_state()
+    stale = [p for p in recent_wavs()
+             if p.name not in seen and time.time() - mtime_or_zero(p) > STARTUP_MAX_AGE]
+    if stale:
+        log.info("quiet start: skipping %d unseen recordings older than %d min",
+                 len(stale), STARTUP_MAX_AGE // 60)
+        for p in sorted(stale, key=mtime_or_zero):
+            seen[p.name] = None
     save_state(seen)
 
     need_model = backfill > 0 or not once
