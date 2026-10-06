@@ -18,6 +18,12 @@ class ChannelTests(unittest.TestCase):
         p = Path("/home/scribe/trunk-build/cirn80/2026/10/6/1911-1791304146.7_161875000.0-call_1.wav")
         self.assertIsNone(wt.channel_of(p))
 
+    def test_chp_green_only(self):
+        green = Path("/home/scribe/trunk-build/c33/2026/10/6/2-1791305156.344_45360000.0-call_2032.wav")
+        gold = Path("/home/scribe/trunk-build/c33/2026/10/6/1-1791305156.344_44620000.0-call_2033.wav")
+        self.assertEqual(wt.channel_of(green), ("c33", 45360, "CHP Green"))
+        self.assertIsNone(wt.channel_of(gold))
+
     def test_fire_by_frequency(self):
         p = Path("/home/scribe/trunk-build/fire/2026/10/6/1-1791304146.7_151325000.0-call_9.wav")
         self.assertEqual(wt.channel_of(p), ("fire", 151325, "NEU West"))

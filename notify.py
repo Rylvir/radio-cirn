@@ -25,6 +25,7 @@ BODY_MAX = 3000  # ntfy.sh rejects message bodies over 4096 bytes
 # category -> (ntfy priority 1-5, emoji tags)
 STYLE = {
     "firefighter_down": (5, "sos,rotating_light"),
+    "officer_emergency": (5, "sos,police_car"),
     "mass_casualty": (5, "rotating_light,ambulance"),
     "building_collapse": (5, "rotating_light,house"),
     "shooting": (5, "rotating_light,police_car"),

@@ -43,6 +43,8 @@ CATEGORIES = [
      "Vehicle or foot pursuit / failure to yield", "Pursuit"),
     ("firefighter_down", "Firefighter Down",
      "Mayday / Firefighter Down", "FF down"),
+    ("officer_emergency", "Officer Needs Help",
+     "11-99 / Officer down / Code 3 backup / Code 33 emergency traffic", "Officer"),
     ("building_collapse", "Building Collapse",
      "Structural collapse", "Collapse"),
     ("mass_casualty", "Mass Casualty",
@@ -99,7 +101,9 @@ _SHOOTING_PAIN = re.compile(r"\bshooting\b(?:\s+\w+){0,2}\s+pain\b")
 # and "not in pursuit" fall to the usual negation window.
 _PURSUIT = re.compile(
     r"\b(fail(?:ure|ed|ing|s)? to yield|(?:foot|vehicle) pursuit|in pursuit|"
-    r"pursuit)\b"
+    # CHP's "attempt to overtake" starts a pursuit. Not the bare "ATO": in
+    # this traffic that is animal control and "cancel ATO".
+    r"attempt(?:ing|ed)? to overtake|pursuit)\b"
 )
 _PURSUIT_NOT = re.compile(
     r"\b(?:are (?:you|they)(?: actively| still)?(?: in)?|if (?:you're|they're|you are|they are)|"
@@ -109,6 +113,22 @@ _PURSUIT_NOT = re.compile(
     r"native)\s*$"
 )
 # "pursuit transport", a GPS monitor's "pursuit mode".
+# Officer emergencies. "1199" is never a time (no minute 99) but it can be
+# an address ("to 1199 Tavistock"). "10-33" alone is usually a time on the
+# fire channels ("AMR 142, 10-33" at 10:33) or a case number, so it counts
+# only as emergency traffic.
+_OFFICER = re.compile(
+    r"\b(11-99|officers? down|officer needs help|"
+    r"code (?:3|three) (?:back ?up|cover|assist)|"
+    r"(?:need|needs|request|requesting|send|start) (?:back ?up|cover) code (?:3|three)|"
+    r"code 33|10-?33 traffic|emergency traffic(?: only)?)\b"
+)
+_ELEVEN99 = re.compile(r"\b(1199)\b")
+_ADDRESS_BEFORE = re.compile(r"\b(?:to|at|of|on|address|block)\s+$")
+_ADDRESS_AFTER = re.compile(
+    r"^\s+(?:[a-z]+\s+){0,2}?(?:street|st|road|rd|avenue|ave|drive|dr|lane|ln|way|"
+    r"blvd|boulevard|court|ct|circle|cir|place|pl)\b"
+)
 _PURSUIT_AFTER = re.compile(r"^\s*(?:terminated|cancell?ed|transport|called off|mode)\b")
 _TECH = re.compile(
     r"\b(technical rescue|confined space|trench rescue|trench collapse|"
@@ -515,6 +535,21 @@ def classify(text: str):
     return None
 
 
+def _officer(t: str):
+    hit = _mentioned(t, _OFFICER)
+    if hit:
+        return hit
+    for m in _ELEVEN99.finditer(t):
+        if _ADDRESS_BEFORE.search(t[max(0, m.start() - 12):m.start()]):
+            continue
+        if _ADDRESS_AFTER.search(t[m.end():m.end() + 30]):
+            continue
+        if _NEG.search(t[max(0, m.start() - 48):m.start()]):
+            continue
+        return "11-99"
+    return None
+
+
 def _pursuit(t: str):
     for m in _PURSUIT.finditer(t):
         before = t[max(0, m.start() - 48):m.start()]
@@ -532,6 +567,9 @@ def _classify_major(t: str):
         return _hit("firefighter_down", "firefighter down")
     if _mentioned(t, _MAYDAY) and _mentioned(t, _FF_WORD):
         return _hit("firefighter_down", "mayday")
+    officer = _officer(t)
+    if officer:
+        return _hit("officer_emergency", officer)
     if _mentioned(t, _COLLAPSE):
         return _hit("building_collapse", "collapse")
     if _mentioned(t, _MCI):

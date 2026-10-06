@@ -107,6 +107,41 @@ class ClassifyTests(unittest.TestCase):
                 self.assertEqual(hit["category"], "pursuit")
                 self.assertEqual(hit["evidence"], ev)
 
+    def test_attempt_to_overtake_is_a_pursuit(self):
+        hit = ic.classify("CHP is attempting to overtake a white Honda, eastbound 80 at Bell")
+        self.assertEqual(hit["category"], "pursuit")
+        for text in ("ATO, dispatch, be off the air for a minute.",
+                     "Class of 2020, you can cancel ATO. Copy, cancel ATO."):
+            with self.subTest(text=text):
+                self.assertIsNone(ic.classify(text))
+
+    def test_officer_emergency(self):
+        for text, ev in (
+            ("Lincoln 21, 11-99, Joiner and Ferrari Ranch", "11-99"),
+            ("all units 1199, Highway 65 at Twelve Bridges", "11-99"),
+            ("10-v2, officer down.", "officer down"),
+            ("21, I need code 3 backup, he's fighting", "code 3 backup"),
+            ("requesting backup code 3 at the Walmart", "requesting backup code 3"),
+            ("Green, code 33, 11-80 eastbound 80 at Applegate", "code 33"),
+            ("10-33 traffic, all units stand by", "10-33 traffic"),
+        ):
+            with self.subTest(text=text):
+                hit = ic.classify(text)
+                self.assertEqual(hit["category"], "officer_emergency")
+                self.assertEqual(hit["evidence"], ev)
+
+    def test_not_an_officer_emergency(self):
+        for text in (
+            "AMR 142, 10-33.",
+            "2381 1033",
+            "Case number is going to be 1033-1033.",
+            "I'll be providing a courtesy 1148 to 1199 Tavistock, starting miles 690.",
+            "1199 Main Street, cross of Elm",
+            "negative 11-99, code 4",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(ic.classify(text))
+
     def test_not_a_pursuit(self):
         for text in (
             "13, Robert, negative pursuit, we're just following.",
@@ -436,7 +471,7 @@ class MergeTests(unittest.TestCase):
             self.assertEqual([e["rel"] for e in log], ["cirn/x.wav", "cirn/y.wav"])
             self.assertEqual(log[1]["time"], "2026-09-27T18:05:00")
             self.assertEqual(data["alerts"][0]["talkgroups"], [2001])
-            self.assertEqual(len(data["categories"]), 12)
+            self.assertEqual(len(data["categories"]), 13)
 
 
 BLUE = [  # NEU West, 2026-09-28, as transcribed

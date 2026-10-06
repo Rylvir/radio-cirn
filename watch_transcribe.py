@@ -10,8 +10,10 @@ renumber (Air Tactics removed, Roseville added) does not mislabel them:
 Law dispatch is 2001 PCSO West, 2003 PCSO East, 10201 Lincoln PD,
 10601 Auburn PD, from both PIRCS sites: trunk-recorder files a call under
 cirn/ or cirn80/ depending on which site carried it, and about one PCSO
-call in five is only on cirn80. Fire is always transcribed before law, and each pass
-takes at most one law call so PCSO traffic cannot bury a fire dispatch.
+call in five is only on cirn80. CHP Green (45.360, Auburn / Grass Valley /
+Placerville) comes from the c33/ low-band recorder. Fire is always transcribed first, then PCSO/PD, then CHP, one law call
+per pass, so neither PCSO nor CHP traffic can bury a fire dispatch. CHP
+calls left waiting longer than CHP_MAX_WAIT at peak times are skipped.
 
 Startup is quiet: recordings already on disk are seeded as seen, so a
 restart does not replay history into the alert list, and anything over
@@ -44,6 +46,12 @@ FIRE_DIR = Path("/home/scribe/trunk-build/fire")
 CIRN_DIRS = (Path("/home/scribe/trunk-build/cirn"),
              Path("/home/scribe/trunk-build/cirn80"))
 LAW_SYSTEMS = {d.name for d in CIRN_DIRS}
+C33_DIR = Path("/home/scribe/trunk-build/c33")
+# CHP low band, by frequency like fire. Gold/Gray/Blue stay audio-only.
+CHP_MHZ = {
+    45.360: "CHP Green",
+}
+CHP_MAX_WAIT = 30 * 60
 # MHz -> name. Row numbers in fire.csv change; the frequency does not.
 FIRE_MHZ = {
     151.325: "NEU West",
@@ -77,13 +85,17 @@ INITIAL_PROMPT = "Fire and police dispatch in Placer County, California."
 # Hotwords bias the decoder toward local radio vocabulary without being
 # written into the transcript the way a long initial prompt often is.
 # The lists live in incident_classify so the echo stripper knows them.
-HOTWORDS = {"fire": FIRE_HOTWORDS, "cirn": LAW_HOTWORDS}
+HOTWORDS = {"fire": FIRE_HOTWORDS, "cirn": LAW_HOTWORDS, "c33": LAW_HOTWORDS}
 
 log = logging.getLogger("watch_transcribe")
 
 
 def system_of(path: Path) -> str:
-    return "cirn" if LAW_SYSTEMS & set(path.parts) else "fire"
+    if LAW_SYSTEMS & set(path.parts):
+        return "cirn"
+    if C33_DIR.name in path.parts:
+        return "c33"
+    return "fire"
 
 
 def parse_tg(name: str):
@@ -108,13 +120,14 @@ def channel_of(path: Path):
     Fire is matched on frequency so fire.csv row numbers can change.
     Law is matched on the P25 talkgroup, which does not move.
     """
-    if system_of(path) == "fire":
+    sysname = system_of(path)
+    if sysname in ("fire", "c33"):
         mhz = file_mhz(path.name)
         if mhz is None:
             return None
-        for freq, name in FIRE_MHZ.items():
+        for freq, name in (FIRE_MHZ if sysname == "fire" else CHP_MHZ).items():
             if abs(mhz - freq) < 0.002:
-                return ("fire", int(round(freq * 1000)), name)
+                return (sysname, int(round(freq * 1000)), name)
         return None
     tg = parse_tg(path.name)
     name = LAW_TG.get(tg)
@@ -125,7 +138,7 @@ def channel_of(path: Path):
 
 def recent_wavs(days: int = DATE_DIR_DAYS):
     out = []
-    for root in (FIRE_DIR, *CIRN_DIRS):
+    for root in (FIRE_DIR, *CIRN_DIRS, C33_DIR):
         if not root.exists():
             continue
         for i in range(days):
@@ -425,8 +438,7 @@ def main(backfill: int = 0, once: bool = False):
 
     while True:
         dirty = False
-        fire_q = []
-        law_q = []
+        queues = {"fire": [], "cirn": [], "c33": []}
         for wav in recent_wavs():
             if wav.name in seen:
                 continue
@@ -437,10 +449,19 @@ def main(backfill: int = 0, once: bool = False):
                 seen[wav.name] = None
                 dirty = True
                 continue
-            (fire_q if channel[0] == "fire" else law_q).append(wav)
-        fire_q.sort(key=mtime_or_zero)
-        law_q.sort(key=mtime_or_zero)
-        batch = fire_q + law_q[:LAW_PER_PASS]
+            queues[channel[0]].append(wav)
+        for q in queues.values():
+            q.sort(key=mtime_or_zero)
+        stale = [w for w in queues["c33"] if time.time() - mtime_or_zero(w) > CHP_MAX_WAIT]
+        if stale:
+            log.info("CHP backlog: skipping %d calls older than %d min",
+                     len(stale), CHP_MAX_WAIT // 60)
+            for w in stale:
+                seen[w.name] = None
+            dirty = True
+            queues["c33"] = queues["c33"][len(stale):]
+        law = queues["cirn"] or queues["c33"]
+        batch = queues["fire"] + law[:LAW_PER_PASS]
         for wav in batch:
             status = process(model, conn, wav, seen)
             if status == "wait":
@@ -454,7 +475,10 @@ def main(backfill: int = 0, once: bool = False):
             save_state(seen)
         if once:
             return
-        time.sleep(POLL_INTERVAL)
+        if not batch:
+            # Only rest when there was nothing to do; after a law call go
+            # straight back so fire is rechecked and the queue keeps moving.
+            time.sleep(POLL_INTERVAL)
 
 
 if __name__ == "__main__":
