@@ -160,6 +160,17 @@ class ClassifyTests(unittest.TestCase):
     def test_negated_shots(self):
         self.assertIsNone(ic.classify("no shots fired, just fireworks"))
 
+    def test_shooting_range_is_not_a_shooting(self):
+        self.assertIsNone(ic.classify(
+            "huge amount of dirt on the south end of that property that they use "
+            "as a shooting range. Copy, negative of WAMP right now, still investigating."))
+        self.assertEqual(ic.classify("we have a shooting at the range parking lot")["category"],
+                         "shooting")
+
+    def test_cabin_fire_is_a_structure_fire(self):
+        hit = ic.classify("engine 84 is on scene. Fully involved cabin.")
+        self.assertEqual(hit["category"], "structure_fire")
+
     def test_shooting_pain_is_medical(self):
         self.assertIsNone(ic.classify("patient has shooting pain in the left arm"))
 
@@ -389,12 +400,25 @@ class MergeTests(unittest.TestCase):
         self.assertIn("defensive", out[0]["text"])
         self.assertEqual(out[0]["started"], "2026-09-27T12:00:00")
 
-    def test_foresthill_calls_on_the_same_channel_stay_separate(self):
-        first = self._alert(category="foresthill", label="Foresthill",
-                            text="medical foresthill", location=None)
-        nxt = self._alert(id="b", category="foresthill", label="Foresthill",
-                          updated="2026-09-27T12:10:00",
-                          text="traffic stop foresthill", location=None)
+    def test_foresthill_same_incident_merges_across_channels(self):
+        # 2026-10-08: NEU at 09:54, CHP Green at 10:00, one crash.
+        first = self._alert(category="foresthill", label="Foresthill", talkgroup=151325,
+                            talkgroup_name="NEU West", started="2026-10-08T09:54:00",
+                            updated="2026-10-08T09:54:00", location=None,
+                            text="single car collision at Forest Hill Road and Spring Garden Road")
+        nxt = self._alert(id="b", category="foresthill", label="Foresthill", talkgroup=45360,
+                          talkgroup_name="CHP Green", system="c33", location=None,
+                          updated="2026-10-08T10:00:00",
+                          text="45-249 I will 11-82. Forest Hill on Spring Garden.")
+        out = ic.merge_alert([first], nxt)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["channels"], ["NEU West", "CHP Green"])
+
+    def test_foresthill_alerts_far_apart_stay_separate(self):
+        first = self._alert(category="foresthill", label="Foresthill", location=None,
+                            text="vehicle accident foresthill road")
+        nxt = self._alert(id="b", category="foresthill", label="Foresthill", location=None,
+                          updated="2026-09-27T12:40:00", text="brush fire, foresthill")
         self.assertEqual(len(ic.merge_alert([first], nxt)), 2)
 
     def test_different_address_stays_separate(self):

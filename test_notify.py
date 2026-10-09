@@ -36,14 +36,20 @@ class NotifyRuleTests(unittest.TestCase):
             self.assertEqual(headers["Priority"], "4")
             self.assertEqual(len(json.loads(path.read_text())["alerts"]), 1)
 
-    def test_foresthill_every_call_notifies(self):
+    def test_foresthill_same_incident_notifies_once_per_channel(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "a.json"
             a = self._record("2026-09-28T12:00:00", 2001, "PCSO West", "cirn",
                              "vehicle accident, Foresthill Road", path)
             b = self._record("2026-09-28T12:01:00", 2001, "PCSO West", "cirn",
                              "brush fire reported, Foresthill", path)
-            self.assertTrue(notify.should_send(a) and notify.should_send(b))
+            c = ic.record_alert(ic.classify("11-82, Foresthill on Spring Garden"),
+                                talkgroup=45360, talkgroup_name="CHP Green", system="c33",
+                                when_iso="2026-09-28T12:05:00", rel="",
+                                text="11-82, Foresthill on Spring Garden", alerts_path=path)
+            self.assertTrue(notify.should_send(a))
+            self.assertFalse(notify.should_send(b))   # same incident, same channel
+            self.assertTrue(notify.should_send(c))    # CHP joins: new channel
             self.assertEqual(notify.build(a)[2]["Priority"], "3")
 
     def test_major_incident_in_foresthill_says_so(self):

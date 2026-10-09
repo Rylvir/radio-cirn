@@ -366,7 +366,7 @@ def process(model, conn, wav: Path, seen: dict) -> str:
         if confirmed:
             notify.send_confirmation(followed)
         return "followup"
-    log.info("routine %s %s: %s", tg, name, (text or "")[:100])
+    log.info("routine %s %s: %s ← %s", tg, name, (text or "")[:100], wav.name)
     return "routine"
 
 

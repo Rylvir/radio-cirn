@@ -89,7 +89,8 @@ _AIRPORT_ALERT_N = re.compile(r"\balert\s*(?:2|3|ii|iii|two|three)\b")
 _AIRPORT_CTX = re.compile(r"\b(airport|aircraft|airliner|runway|plane)\b")
 _SHOOTING = re.compile(
     r"\b(shots? fired|gunshot|gsw|active shooter|"
-    r"(?:report of |it's |it is |a )shooting|"
+    # "the property that they use as a shooting range" is not a shooting.
+    r"(?:report of |it's |it is |a )shooting(?! (?:range|gallery|club|practice|sports))|"
     r"shooting (?:in progress|at\b|incident)|"
     r"person shot|(?:has |been |was |got )shot|"
     r"shot (?:a |the )?(?:person|victim|male|female|man|woman))\b"
@@ -239,7 +240,8 @@ _STRUCTURE_OBJECT = re.compile(
     r"residential fire|commercial fire|dwelling fire|"
     r"structure(?!s? (?:protection|defense|threatened|group))|"
     r"house|home|residence|residential|dwelling|building|apartment|"
-    r"garage|barn|shed|attic|mobile home|"
+    r"garage|barn|shed|attic|mobile home|cabin|outbuilding|carport|duplex|"
+    r"condo(?:minium)?|townhouse|cottage|"
     r"(?:multiple|second|third|fourth|2nd|3rd|4th|two|three|four) alarm)\b"
 )
 _LOC_STREET = re.compile(
@@ -688,10 +690,15 @@ def merge_alert(alerts: list, new: dict) -> list:
             continue
         same_tg = (prev.get("system") == new.get("system")
                    and prev.get("talkgroup") == new.get("talkgroup"))
-        # Foresthill is a place watch. Unrelated calls on the same channel
-        # stay separate so the list shows how often the name comes up.
+        # Foresthill alerts need a real event, so two within 15 minutes are
+        # one incident in a small town: NEU's "collision at Forest Hill Road
+        # and Spring Garden" and CHP's "11-82, Forest Hill on Spring Garden"
+        # six minutes later. Further apart they stay separate.
         if new.get("category") == "foresthill":
-            same_tg = False
+            if gap <= MERGE_CROSS_CHANNEL_SEC:
+                _apply_merge(prev, new)
+                return alerts[-ALERT_CAP:]
+            continue
         if same_tg and gap <= MERGE_SAME_TG_SEC:
             _apply_merge(prev, new)
             return alerts[-ALERT_CAP:]
