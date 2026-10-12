@@ -34,11 +34,15 @@ CATEGORIES = [
     ("other_fire", "Other Fire",
      "Smoke Showing / Working Fire (vehicle, dumpster, pallet, unknown)", "Other fire"),
     ("brush_grass_fire", "Brush/Grass Fire",
-     "Major Brush Fire", "Brush"),
+     "Rate of spread / Aircraft / Acres / Structures threatened / Wildland dispatch", "Brush"),
     ("motor_vehicle_accident", "MVA",
      "Rollover / Extrication / Major Damage / Multiple Vehicles", "MVA"),
-    ("shooting", "Shooting",
-     "Shots fired", "Shooting"),
+    ("shooting", "Shooting / Stabbing",
+     "Shots fired / Active shooter / Stabbing", "Shooting"),
+    ("fatality", "Fatality",
+     "Fatal crash / confirmed 11-44 / coroner requested", "Fatality"),
+    ("evacuation", "Evacuation / Lockdown",
+     "Evacuations / Lockdown / Shelter in place / Everbridge alert", "Evacuation"),
     ("pursuit", "Pursuit",
      "Vehicle or foot pursuit / failure to yield", "Pursuit"),
     ("firefighter_down", "Firefighter Down",
@@ -52,7 +56,7 @@ CATEGORIES = [
     ("airport_alert", "Airport Alert",
      "Aircraft emergency", "Airport"),
     ("technical_rescue", "Technical Rescue",
-     "Confined space / trench / high angle / swift water", "Tech rescue"),
+     "Confined space / trench / high angle / water rescue / drowning", "Tech rescue"),
     # Geographic watch on every transcribed fire and law channel.
     # A real major incident in town still keeps its own category.
     ("foresthill", "Foresthill",
@@ -61,8 +65,13 @@ CATEGORIES = [
 
 _BY_ID = {c[0]: c for c in CATEGORIES}
 
+# Contractions that deny the event ("don't have smoke showing", "isn't a
+# rollover"); a bare "n't" never matched inside a word. "Don't know if it's
+# related to the shots fired" is not a denial, so "don't know" stays out.
 _NEG = re.compile(
-    r"\b(no|not|n't|nothing|without|negative|cancel(?:l?ed)?|"
+    r"\b(no|not|isn't|aren't|wasn't|weren't|haven't|hasn't|"
+    r"don't (?:have|see|need|show)|doesn't (?:have|appear|look|show|need)|"
+    r"didn't (?:have|see|find)|nothing|without|negative|cancel(?:l?ed)?|"
     r"unfounded|false alarm|disregard|unable)\b"
 )
 
@@ -93,7 +102,10 @@ _SHOOTING = re.compile(
     r"(?:report of |it's |it is |a )shooting(?! (?:range|gallery|club|practice|sports))|"
     r"shooting (?:in progress|at\b|incident)|"
     r"person shot|(?:has |been |was |got )shot|"
-    r"shot (?:a |the )?(?:person|victim|male|female|man|woman))\b"
+    r"shot (?:a |the )?(?:person|victim|male|female|man|woman)|"
+    # "stabbing drive" is a garbled street name; these are the real forms.
+    r"(?:was |been |got |just |he |she )stabbed|stabbed (?:in|his|her|a|the)|"
+    r"(?:a |report of (?:a )?)stabbing|stabbing (?:victim|in progress|incident))\b"
 )
 _SHOOTING_PAIN = re.compile(r"\bshooting\b(?:\s+\w+){0,2}\s+pain\b")
 # "CHP has a failure to yield, motorcycle over 100", "Roseville's in
@@ -130,10 +142,65 @@ _ADDRESS_AFTER = re.compile(
     r"^\s+(?:[a-z]+\s+){0,2}?(?:street|st|road|rd|avenue|ave|drive|dr|lane|ln|way|"
     r"blvd|boulevard|court|ct|circle|cir|place|pl)\b"
 )
+# Wildland wording that is a fire by itself: a rate-of-spread report is
+# a confirmed vegetation fire; so is a wildland dispatch level.
+_ROS = re.compile(
+    r"\b((?:(slow|low|moderate|medium|high|rapid|dangerous|critical|extreme)\s+)?"
+    r"rate of spread)\b"
+)
+_ROS_URGENT = {"high", "rapid", "dangerous", "critical", "extreme"}
+_WILDLAND_DISPATCH = re.compile(
+    r"\b((?:full|high|medium)[\s-]?(?:level )?wildland (?:dispatch|response)|"
+    r"wildland (?:dispatch|response))\b"
+)
+_STRUCT_THREAT = re.compile(
+    r"\b(structures? (?:are |is |immediately )?threatened|threat to structures?)\b"
+)
+_AIR_ATTACK = re.compile(r"\bair ?(?:attack|tack|tac)(?! base| bays?)\b|\bairtack\b")
+
+# Fatalities. "fatal birth" is "date of birth" misheard. "1144" is also the
+# time 11:44 and CHP's dead deer in the road, so the code needs a person or
+# a confirming word next to it.
+_FATAL = re.compile(
+    r"\b(fatalit(?:y|ies)|fatal (?:accident|collision|crash|tc|injur\w+|shooting|stabbing)|"
+    r"(?:confirm(?:ed|ing)?|advis(?:e|es|ed|ing)|is an?|possible|they have an?) 11-?44|"
+    r"(?:one|two|three|\d) 11-?44|11-?44 (?:officer|subject|male|female|person|patient|"
+    r"victim|driver|passenger|juvenile|adult|investigation)|"
+    r"(?:officers?|subjects?|part(?:y|ies)|patients?|victims?|driver|passenger),? 11-?44|"
+    r"(?:start|request(?:ing)?|call|notify|need|waiting? for) (?:a |the )?coroner)\b"
+)
+_FATAL_VIOLENT = re.compile(
+    r"\b(fatalit(?:y|ies)|fatal|vehicle|accident|collision|crash|roll[\s-]?over|tc|"
+    r"chp|11-?8[0-3]|shot|shooting|stabb\w+|drown\w*|fire|homicide|187)\b"
+)
+_ANIMAL_AFTER = re.compile(r"^\W*(?:deers?|dogs?|cats?|animals?|bears?|coyotes?|raccoons?|turkeys?|skunks?|geese|goose|cow|horse|gear)\b")
+
+# Evacuation / lockdown. "The house has been evacuated" on a CO alarm is
+# routine, so only the ongoing forms count; "10-27 for lockdown" is a
+# records check Whisper garbles before a spelled name.
+_EVAC = re.compile(
+    # Not the bare "evac": in this traffic it only matched garbled audio.
+    r"\b(evacuations?|evacuating|evacuate|ever[\s-]?bridge|shelter[\s-]in[\s-]place|"
+    r"(?:on|in|into|a|the|full|school|campus|hospital|precautionary) lock[\s-]?down)\b"
+)
+_EVAC_NOT_BEFORE = re.compile(
+    r"\b(?:medical|medically|air|any)\s+$|"
+    # hypotheticals: "in the event that evacuations are needed"
+    r"\b(?:in case|in the event|if|whether|may need|might need)\b[\w\s]{0,24}$"
+)
+_EVAC_NOT_AFTER = re.compile(r"^\s+(?:him|her|them|the patient|the suspect)\b")
+# Over the side needs a vehicle; 11-80 (major injury crash, CHP) needs injuries.
+_OVER_SIDE = re.compile(r"\b(over the (?:side|embankment|edge))\b")
+_CODE_1180 = re.compile(r"(?<![\d-])11-?80\b")
+_MAJOR_INJURY = re.compile(
+    r"\b(airlift\w*|air ambulance|life ?flight|care ?flight|fracture|major injur\w+|"
+    r"unconscious|unresponsive|not breathing|over the side|pinned)\b"
+)
 _PURSUIT_AFTER = re.compile(r"^\s*(?:terminated|cancell?ed|transport|called off|mode)\b")
 _TECH = re.compile(
     r"\b(technical rescue|confined space|trench rescue|trench collapse|"
-    r"high angle|swift\s?water|rope rescue)\b"
+    r"high angle|swift\s?water|rope rescue|water rescue|drowning|"
+    r"swimmer in distress)\b"
 )
 _MVA_STRONG = re.compile(
     r"\b(roll[\s-]?over|extrication|entrapp?ed)\b"
@@ -164,6 +231,10 @@ _CRASH_WORD = re.compile(
 )
 _SEVERITY = re.compile(
     r"\b(smoke (?:is )?showing|showing smoke|working (?:a )?fire|"
+    # "working house fire", "working a garage fire"; not "working with fire".
+    r"working (?:a )?(?:structure|house|residential|commercial|garage|apartment|"
+    r"building|barn|kitchen|attic|chimney|vehicle|passenger vehicle|car|brush|"
+    r"grass|vegetation|wildland) fire|"
     r"fully involved|flames showing|fire showing|"
     r"(?:multiple|second|third|fourth|2nd|3rd|4th|two|three|four) alarm|"
     r"defensive (?:operations|mode)|going defensive)\b"
@@ -181,7 +252,10 @@ _GRASS_CALLSIGN_AFTER = re.compile(
 # "Extended attack" is a major fire. A bare "extended" is not: every use on
 # the fire channels was "extended ETA", "extended on bed delay" and the like.
 _BRUSH_MAJOR = re.compile(
-    r"\b(major|extended attack|large|campaign|evacuation|acres?|"
+    r"\b(major|extended attack|large|campaign|evacuations?|acres?|"
+    # aircraft on a fire ("Grass Valley air attack base" is a place)
+    r"air ?attack(?! base| bays?)|air ?tac(?:k)?(?! base)|tanker \d|copter \d|helitanker|"
+    r"structures? (?:are |is |immediately )?threatened|"
     r"working (?:a )?(?:brush |grass |vegetation |wildland )?fire|"
     r"fully involved)\b"
 )
@@ -393,6 +467,7 @@ def location_tokens(text: str) -> set:
 _CONFIRM = re.compile(
     r"\b(arrived|report on conditions|conditions report|as described|"
     r"can handle|under control|knock(?:ed)? ?down|size[- ]?up|10-?97|"
+    r"forward (?:progress|spread)(?: has| is)? (?:stopped|halted)|"
     r"(?:i'm|we're|i am|we are|is|are) 97)\b"
 )
 _CONFIRM_NOT = re.compile(
@@ -538,6 +613,10 @@ def classify(text: str):
         return None
     place = foresthill_mentioned(t)
     hit = _classify_major(t)
+    if not hit:
+        evac = _evacuation(t)
+        if evac:
+            hit = _hit("evacuation", evac)
     if hit:
         if place:
             hit["place"] = "foresthill"
@@ -564,6 +643,46 @@ def _officer(t: str):
             continue
         return "11-99"
     return None
+
+
+def _fatality(t: str):
+    for m in _FATAL.finditer(t):
+        if _NEG.search(t[max(0, m.start() - 30):m.start()]):
+            continue
+        if "11-44" in m.group(0) or "1144" in m.group(0):
+            if _ANIMAL_AFTER.match(t[m.end():m.end() + 12]):
+                continue
+        return m.group(0)
+    return None
+
+
+def _evacuation(t: str):
+    for m in _EVAC.finditer(t):
+        before = t[max(0, m.start() - 30):m.start()]
+        if _NEG.search(before) or _EVAC_NOT_BEFORE.search(before):
+            continue
+        if _EVAC_NOT_AFTER.match(t[m.end():m.end() + 14]):
+            continue
+        return m.group(0)
+    return None
+
+
+def _wildland(t: str):
+    """(evidence, urgent) for wildland wording that needs no 'vegetation fire'."""
+    for m in _ROS.finditer(t):
+        if _NEG.search(t[max(0, m.start() - 24):m.start()]):
+            continue
+        return m.group(1), (m.group(2) in _ROS_URGENT)
+    hit = _mentioned(t, _WILDLAND_DISPATCH)
+    if hit:
+        return hit, False
+    for m in _STRUCT_THREAT.finditer(t):
+        if re.search(r"\b(?:no|not|n't|negative|any|without)\s+(?:\w+\s+)?$", t[max(0, m.start() - 24):m.start()]):
+            continue
+        return m.group(1), True
+    if _AIR_ATTACK.search(t) and _mentioned(t, _AIR_REPORT):
+        return "air attack report", False
+    return None, False
 
 
 def _brush(t: str):
@@ -602,6 +721,14 @@ def _classify_major(t: str):
         return _hit("building_collapse", "collapse")
     if _mentioned(t, _MCI):
         return _hit("mass_casualty", "mass casualty")
+    fatal = _fatality(t)
+    if fatal:
+        hit = _hit("fatality", fatal)
+        # A death at a medical call is logged quietly; a fatal crash,
+        # shooting, drowning or fire is top priority.
+        if _FATAL_VIOLENT.search(t):
+            hit["urgent"] = True
+        return hit
 
     airport = _mentioned(t, _AIRPORT)
     if not airport and _AIRPORT_CTX.search(t):
@@ -621,6 +748,10 @@ def _classify_major(t: str):
         return _hit("technical_rescue", _mentioned(t, _TECH))
 
     mva = _mentioned(t, _MVA_STRONG) or _mentioned(t, _MVA_MAJOR)
+    if not mva and _mentioned(t, _OVER_SIDE) and _CRASH_CTX.search(t):
+        mva = _mentioned(t, _OVER_SIDE)
+    if not mva and _CODE_1180.search(t) and _mentioned(t, _MAJOR_INJURY):
+        mva = "11-80 " + _mentioned(t, _MAJOR_INJURY)
     if not mva and _mentioned(t, _EJECTED) and _CRASH_CTX.search(t):
         mva = "ejected"
     if not mva and _mentioned(t, _HIGH_LEVEL) and _mentioned(t, _CRASH_WORD):
@@ -633,6 +764,16 @@ def _classify_major(t: str):
     brush = _brush(t)
     if brush and _mentioned(t, _BRUSH_MAJOR):
         return _hit("brush_grass_fire", brush)
+    wild, urgent = _wildland(t)
+    if wild:
+        hit = _hit("brush_grass_fire", wild)
+        # "soft": a conditions report. If it names the units or the incident
+        # of an alert that is already open, it belongs to that alert (see
+        # watch_transcribe.process) instead of starting a second one.
+        hit["soft"] = True
+        if urgent:
+            hit["urgent"] = True
+        return hit
 
     severity = _mentioned(t, _SEVERITY)
     if not severity:
@@ -692,6 +833,8 @@ def _apply_merge(prev: dict, new: dict):
         prev["location"] = new["location"]
     if new.get("place") and not prev.get("place"):
         prev["place"] = new["place"]
+    if new.get("urgent"):
+        prev["urgent"] = True
 
 
 def _tokens_of(alert: dict) -> set:
@@ -882,6 +1025,8 @@ def record_alert(hit: dict, *, talkgroup, talkgroup_name, system, when_iso,
     new["incident"] = sorted(incident_names(text))
     if hit.get("place"):
         new["place"] = hit["place"]
+    if hit.get("urgent"):
+        new["urgent"] = True
     def apply(data):
         data["alerts"] = merge_alert(data["alerts"], new)
         if new.get("merged_into"):

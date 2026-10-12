@@ -29,6 +29,8 @@ STYLE = {
     "mass_casualty": (5, "rotating_light,ambulance"),
     "building_collapse": (5, "rotating_light,house"),
     "shooting": (5, "rotating_light,police_car"),
+    "fatality": (3, "warning"),
+    "evacuation": (5, "rotating_light,loudspeaker"),
     "pursuit": (4, "police_car,dash"),
     "airport_alert": (5, "rotating_light,airplane"),
     "structure_fire": (4, "fire,house"),
@@ -68,6 +70,8 @@ def build(record: dict):
     if len(body) > BODY_MAX:
         body = body[:BODY_MAX - 3] + "..."
     prio, tags = STYLE.get(record.get("category"), (4, "rotating_light"))
+    if record.get("urgent"):
+        prio = 5   # e.g. high rate of spread, structures threatened
     headers = {
         "Title": _ascii(title),
         "Priority": str(prio),
@@ -80,16 +84,17 @@ def build(record: dict):
     return title, body, headers
 
 
-def build_confirmation(record: dict):
+def build_confirmation(record: dict, prefix: str = "Confirmed"):
     """(title, body, headers) for the first follow-up confirming a dispatch."""
     conf = record.get("confirmation") or {}
     label = record.get("label") or "Alert"
     channel = conf.get("channel") or record.get("talkgroup_name") or ""
-    title = f"Confirmed: {label}" + (f" - {channel}" if channel else "")
+    title = f"{prefix}: {label}" + (f" - {channel}" if channel else "")
     body = (conf.get("text") or "").strip() or "(no transcript text)"
     if len(body) > BODY_MAX:
         body = body[:BODY_MAX - 3] + "..."
-    headers = {"Title": _ascii(title), "Priority": "3", "Tags": "white_check_mark"}
+    headers = {"Title": _ascii(title), "Priority": "5" if record.get("urgent") else "3",
+               "Tags": "white_check_mark"}
     if NTFY_CLICK:
         headers["Click"] = NTFY_CLICK
     if NTFY_TOKEN:
@@ -97,11 +102,11 @@ def build_confirmation(record: dict):
     return title, body, headers
 
 
-def send_confirmation(record: dict, wait: bool = False):
+def send_confirmation(record: dict, wait: bool = False, prefix: str = "Confirmed"):
     """Push the confirmation that joined an alert: normal priority."""
     if not enabled() or not record.get("confirmation"):
         return
-    _title, body, headers = build_confirmation(record)
+    _title, body, headers = build_confirmation(record, prefix)
     if wait:
         _post(body, headers)
         return

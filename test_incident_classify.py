@@ -23,6 +23,12 @@ class ClassifyTests(unittest.TestCase):
     def test_smoke_investigation_is_not_an_alert(self):
         self.assertIsNone(ic.classify("smoke investigation, nothing showing, code 4"))
 
+    def test_contractions_negate(self):
+        self.assertIsNone(ic.classify("structure fire reported, we don't have smoke showing"))
+        self.assertIsNone(ic.classify("it isn't a rollover, vehicle is on its wheels"))
+        hit = ic.classify("incomplete 911, I don't know if it's related to the prior shots fired")
+        self.assertEqual(hit["category"], "shooting")
+
     def test_negated_smoke_showing(self):
         self.assertIsNone(ic.classify("structure fire reported, no smoke showing"))
 
@@ -61,6 +67,116 @@ class ClassifyTests(unittest.TestCase):
 
     def test_dumpster_without_severity(self):
         self.assertIsNone(ic.classify("dumpster fire, nothing showing"))
+
+    def test_wildland_wording(self):
+        for text, ev, urgent in (
+            ("Arrived at scene stating moderate rate of spread, negative structures threatened.",
+             "moderate rate of spread", False),
+            ("update on that vegetation fire call, fires on scene, slow rate of spread", "slow rate of spread", False),
+            ("two acres in grass, high rate of spread", "high rate of spread", True),
+            ("starting a full wildland dispatch, Bell Road at Joeger", "full wildland dispatch", False),
+            ("one acre and structures threatened on the right flank", "structures threatened", True),
+            ("We're in air attack, still two acres, no ground resources on scene yet.", "air attack report", False),
+            ("vegetation fire, Bell Road. Air attack 230, tanker 88 responding", "vegetation fire", False),
+        ):
+            with self.subTest(text=text):
+                hit = ic.classify(text)
+                self.assertEqual(hit["category"], "brush_grass_fire")
+                self.assertEqual(hit["evidence"], ev)
+                self.assertEqual(bool(hit.get("urgent")), urgent)
+
+    def test_not_a_wildland_alert(self):
+        for text in (
+            "Grass Valley air attack base, myself and engine 2372 committed",
+            "Air attack 230, Grass Valley, on the air",
+            "Is there any threat to structures? Negative.",
+            "No structures threatened. Code 4.",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(ic.classify(text))
+
+    def test_working_house_fire(self):
+        for text, cat in (("Engine 16 on scene, working house fire", "structure_fire"),
+                          ("Roseville advising they're working a garage fire on Fawn Court", "structure_fire"),
+                          ("Working passenger vehicle fire spread to wildland", "other_fire")):
+            with self.subTest(text=text):
+                self.assertEqual(ic.classify(text)["category"], cat)
+        self.assertIsNone(ic.classify("I'm working with fire out here. We'll handle a search."))
+
+    def test_fatality(self):
+        for text in (
+            "It just looks like there was a fatality accident around 740.",
+            "Confirmed 11-44. Cancel the air ambulance on the balance. CHP is at scene.",
+            "I'm out with Fire on the CPR. They advise 1144.",
+            "Confirmed 1144. Start a coroner.",
+            "We have one 11-44 officer in the same room as the suspect.",
+            "fatal collision, northbound 65 at Lincoln Boulevard",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(ic.classify(text)["category"], "fatality")
+
+    def test_fatality_priority(self):
+        self.assertFalse(ic.classify("I'm out with Fire on the CPR. They advise 1144.").get("urgent"))
+        self.assertTrue(ic.classify("Confirmed 11-44. Cancel the air ambulance. CHP is at scene.").get("urgent"))
+        self.assertTrue(ic.classify("fatal collision, northbound 65 at Lincoln Boulevard").get("urgent"))
+
+    def test_not_a_fatality(self):
+        for text in (
+            "first of Janetta, fatal birth, 6-11 of 1966.",
+            "information on a 11-44 dog in the center divider northbound 65",
+            "notify Caltrans of the 11-44 deer just south of Old Bridge Road.",
+            "We're going to leave our firefighter at scene at 1144.",
+            "Copy, we're still en route. Roger, 1144.",
+            "12 George Placer, 9-11-44.",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(ic.classify(text))
+
+    def test_evacuation_and_lockdown(self):
+        for text in (
+            "units doing an evacuation, let's make the center the park on Curvy",
+            "calling 911, advising their house is on fire as well. They are evacuating now.",
+            "Can you please advise Auburn PD where they want us to start evacuating?",
+            "there's a school on lockdown right now.",
+            "Can you have Lincoln High School shelter in place?",
+            "Placer County is going to have us put out an ever bridge here shortly",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(ic.classify(text)["category"], "evacuation")
+
+    def test_not_an_evacuation(self):
+        for text in (
+            "No evac necessary.",
+            "12 charlie units evac 415 26395 barbed wire lane",
+            "Two head that way, just in the event that evacuations are needed.",
+            "we don't need them for evacuation notices on Mochi.",
+            "can you advise if there's other residents that may need evacuation",
+            "send a cancel for the Everbridge",
+            "Negative need for EVAC at this time.",
+            "CO alarm going off. House has been evacuated. No ill effects.",
+            "cal fire is going to be medically evacuating that one",
+            "We can evac him off the elevator down to the west end",
+            "Auburn, TCM-23, 10-27 for lock-down. NORA-630-959",
+            "she was going to need to let them in because the place is locked down.",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(ic.classify(text))
+
+    def test_stabbing_and_water_rescue(self):
+        self.assertEqual(ic.classify("RP's advising that his friend was just stabbed.")["category"], "shooting")
+        self.assertEqual(ic.classify("He stabbed his stepfather three times in the abdomen.")["category"], "shooting")
+        self.assertIsNone(ic.classify("cross streets Freemantle Court and stabbing drive C2A2"))
+        self.assertEqual(ic.classify("respond for a water rescue, Folsom Lake at Beals Point")["category"],
+                         "technical_rescue")
+        self.assertIsNone(ic.classify("He is not into the water. No one's currently drowning"))
+
+    def test_over_the_side_and_1180(self):
+        self.assertEqual(ic.classify("an 1180 vehicle over the side on 49 near Brim Lane")["category"],
+                         "motor_vehicle_accident")
+        self.assertEqual(ic.classify("copy at least 1180 one party being airlifted to Sutter")["category"],
+                         "motor_vehicle_accident")
+        self.assertIsNone(ic.classify("she feels like she went over the edge."))
+        self.assertIsNone(ic.classify("Flaps are 1180, 97, ending mileage 6.2"))
 
     def test_grass_valley_misheard_as_grass_fire(self):
         for text in (
@@ -262,7 +378,7 @@ class ClassifyTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIsNone(ic.classify(text))
         hit = ic.classify("water rescue, Forest Hill, subject in the river")
-        self.assertEqual(hit["evidence"], "foresthill + rescue")
+        self.assertEqual((hit["category"], hit.get("place")), ("technical_rescue", "foresthill"))
 
     def test_foresthill_negated_event_is_quiet(self):
         self.assertIsNone(ic.classify("Foresthill Road, no smoke showing, no fire"))
@@ -522,7 +638,7 @@ class MergeTests(unittest.TestCase):
             self.assertEqual([e["rel"] for e in log], ["cirn/x.wav", "cirn/y.wav"])
             self.assertEqual(log[1]["time"], "2026-09-27T18:05:00")
             self.assertEqual(data["alerts"][0]["talkgroups"], [2001])
-            self.assertEqual(len(data["categories"]), 13)
+            self.assertEqual(len(data["categories"]), 15)
 
 
 BLUE = [  # NEU West, 2026-09-28, as transcribed
@@ -560,6 +676,13 @@ class FollowTests(unittest.TestCase):
         for hhmm, text in calls:
             when = f"2026-09-28T{hhmm}"
             hit = ic.classify(text)
+            if hit and hit.get("soft"):       # as watch_transcribe.process does
+                a, first = ic.follow_up(talkgroup=151325, talkgroup_name="NEU West",
+                                        system="fire", when_iso=when, rel=f"{hhmm}.wav",
+                                        text=text, alerts_path=path)
+                if a:
+                    out.append((hhmm, "follow", first))
+                    continue
             if hit:
                 rec = ic.record_alert(hit, talkgroup=151325, talkgroup_name="NEU West",
                                       system="fire", when_iso=when, rel=f"{hhmm}.wav",

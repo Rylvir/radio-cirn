@@ -66,6 +66,16 @@ class NotifyRuleTests(unittest.TestCase):
         self.assertIn("does not appear", body)
         self.assertEqual(headers["Priority"], "3")
 
+    def test_urgent_wildland_is_top_priority(self):
+        hit = ic.classify("two acres in grass, high rate of spread, structures threatened")
+        with tempfile.TemporaryDirectory() as d:
+            rec = ic.record_alert(hit, talkgroup=151325, talkgroup_name="NEU West", system="fire",
+                                  when_iso="2026-10-12T14:00:00", rel="", alerts_path=Path(d) / "a.json",
+                                  text="two acres in grass, high rate of spread, structures threatened")
+        self.assertEqual(notify.build(rec)[2]["Priority"], "5")
+        slow = ic.classify("slow rate of spread, half an acre")
+        self.assertFalse(slow.get("urgent"))
+
     def test_long_transcript_is_trimmed(self):
         body = notify.build({"label": "MVA", "text": "x" * 5000})[1]
         self.assertLessEqual(len(body.encode()), 4096)

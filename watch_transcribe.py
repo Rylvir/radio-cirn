@@ -332,6 +332,27 @@ def process(model, conn, wav: Path, seen: dict) -> str:
     except Exception:
         log.exception("transcribe failed: %s", wav.name)
         return "error"
+    if hit and hit.get("soft"):
+        # A conditions report (rate of spread, air attack size-up): update
+        # the incident it names if one is open; otherwise it is a new alert.
+        try:
+            followed, confirmed = follow_up(
+                talkgroup=tg, talkgroup_name=name, system=sysname,
+                when_iso=start, rel=rel_of(wav), text=text,
+            )
+        except Exception:
+            log.exception("follow-up failed: %s", wav.name)
+            followed, confirmed = None, False
+        if followed:
+            log.info("%s %s (%s) ← %s | %s", "CONFIRMED" if confirmed else "update",
+                     followed.get("category"), hit["evidence"], wav.name, text[:140])
+            if confirmed:
+                notify.send_confirmation(followed)
+            elif hit.get("urgent"):
+                notify.send_confirmation(
+                    {**followed, "urgent": True,
+                     "confirmation": {"channel": name, "text": text}}, prefix="Update")
+            return "followup"
     if hit:
         try:
             record = record_alert(
