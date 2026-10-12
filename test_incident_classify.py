@@ -178,6 +178,91 @@ class ClassifyTests(unittest.TestCase):
         self.assertIsNone(ic.classify("she feels like she went over the edge."))
         self.assertIsNone(ic.classify("Flaps are 1180, 97, ending mileage 6.2"))
 
+    def test_large_assignment_dispatch(self):
+        for text, cat, ev in (
+            ("9 engine 86, engine 88, engine 87, engine 283, engine 27, 51, engine 27, 69, truck 28, "
+             "medic 86, multi-family structure fire, cambridge oaks apartment 257 to nullwood court",
+             "structure_fire", "multi-family structure fire, 7 engines"),
+            ("Battalion 2306, battalion 5612, engine 2364, engine 2354, engine 59, engine 43, engine 44, "
+             "engine 201, water center 88, residential structure fire. 10481 iron cloud road",
+             "structure_fire", "residential structure fire, 6 engines"),
+            ("Battalion 73, air attack 230, tanker 8-8, tanker 8-9, copter 5-1-4, copter 5 bravo tango, "
+             "valley group engine 23-54, engine 23-64, engine 23-72, engine 23-82, engine 70, "
+             "vegetation fire in the area, Karsher McCourtney standby for check back 12-39.",
+             "brush_grass_fire", "vegetation fire"),
+            ("Battalion 2, Engine 7, Engine 2, Battalion 1, Engine 1, Truck 1, Cal Fire Engine 77, AMR. "
+             "Respond to high level commercial structure fire. 2796 McLeod Way.",
+             "structure_fire", "commercial structure fire, 5 engines"),
+        ):
+            with self.subTest(text=text[:40]):
+                hit = ic.classify(text)
+                self.assertEqual((hit["category"], hit["evidence"]), (cat, ev))
+
+    def test_small_or_cancelled_assignment_is_quiet(self):
+        for text in (
+            "Engine 28, medic 28, residential structure fire, 3815 mineshaft lane",
+            "Engine 2351, engine 2361, vegetation fire, Bell Road at Joeger",
+            "Engine 86, engine 88, engine 87, engine 283, truck 28, structure fire, "
+            "engine 86 can handle, balance to cancel",
+            "Engine 7, Engine 2, Engine 1, Truck 1, respond to medical aid, 100 Main Street",
+        ):
+            with self.subTest(text=text[:40]):
+                self.assertIsNone(ic.classify(text))
+
+    def test_tactical(self):
+        for text, ev in (
+            ("We have enough team members on scene, let's get a react team set up in the first piece of armor",
+             "react team"),
+            ("CP from React 1, we're moving on to the property now.", "react 1"),
+            ("we're trying to get a dispatcher for the SET team.", "set team"),
+            ("He is now barricaded in a bathroom at the top of Gold Coast.", "he is now barricaded"),
+            ("advised a BMA approximately 25 years old is holding him hostage, and then took his phone.",
+             "holding him hostage"),
+            ("Female said hostage, hostage, and then hung up.", "said hostage"),
+            ("Ocean 2, Ocean 1, key switch to channel 5.", "switch to channel 5"),
+            ("All units on this call go to dispatch 5", "go to dispatch 5"),
+            ("Sam 1, requesting SWAT, he's armed inside the residence", "requesting swat"),
+        ):
+            with self.subTest(text=text):
+                hit = ic.classify(text)
+                self.assertEqual((hit["category"], hit["evidence"]), ("tactical", ev))
+
+    def test_not_tactical(self):
+        for text in (
+            "Plus 13 Lincoln, 11-26, Athens, TVC, SWAT entrance.",
+            "For the RP, SWAT was called out for these incidents and he's been 51-50'd",
+            "Someone just blew our barricade. Just heads up, I got him stopped.",
+            "RP's advising they've just passed the barricade.",
+            "Hostage is on. 97 at NIAC, ending 158.92",
+            "Hostage at 1649.",
+            "Placer 1 Tom 6, you may be on channel 5.",
+            "Robert Lincoln King, I think he's on channel 5.",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(ic.classify(text))
+
+    def test_explosive(self):
+        for text in (
+            "advising RPs, reporting loud explosions as well.",
+            "getting reports of a suspicious package at Phoenix High School with an explosion heard.",
+            "Fire and police, multiple explosions coming out of one of the vehicles.",
+            "They say they heard some type of explosion and now there's debris all over the roadway.",
+            "bomb threat at the courthouse, 101 Maple Street",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(ic.classify(text)["category"], "explosive")
+
+    def test_not_explosive(self):
+        for text in (
+            "12-bomb, go for it. 10-4.",
+            "Dispatch to the light rail bomb bus? Go for G-10.",
+            "Explosion.",
+            "Route 38, leaving Chatham, exploding south.",
+            "four FTA weapons, flash explosives, bail is five",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(ic.classify(text))
+
     def test_grass_valley_misheard_as_grass_fire(self):
         for text in (
             "143, you are walked on repeat. We'll be extended in right out on the wall. "
@@ -638,7 +723,7 @@ class MergeTests(unittest.TestCase):
             self.assertEqual([e["rel"] for e in log], ["cirn/x.wav", "cirn/y.wav"])
             self.assertEqual(log[1]["time"], "2026-09-27T18:05:00")
             self.assertEqual(data["alerts"][0]["talkgroups"], [2001])
-            self.assertEqual(len(data["categories"]), 15)
+            self.assertEqual(len(data["categories"]), 17)
 
 
 BLUE = [  # NEU West, 2026-09-28, as transcribed

@@ -30,6 +30,8 @@ STYLE = {
     "building_collapse": (5, "rotating_light,house"),
     "shooting": (5, "rotating_light,police_car"),
     "fatality": (3, "warning"),
+    "tactical": (5, "rotating_light,police_car"),
+    "explosive": (5, "rotating_light,boom"),
     "evacuation": (5, "rotating_light,loudspeaker"),
     "pursuit": (4, "police_car,dash"),
     "airport_alert": (5, "rotating_light,airplane"),

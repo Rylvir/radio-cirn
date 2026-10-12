@@ -39,6 +39,11 @@ CATEGORIES = [
      "Rollover / Extrication / Major Damage / Multiple Vehicles", "MVA"),
     ("shooting", "Shooting / Stabbing",
      "Shots fired / Active shooter / Stabbing", "Shooting"),
+    ("tactical", "SWAT / Barricade / Hostage",
+     "SWAT, REACT or Special Enforcement Team / barricaded subject / hostage / move to Dispatch 5",
+     "Tactical"),
+    ("explosive", "Explosion / Bomb Threat",
+     "Explosion / bomb threat / suspicious package or device", "Explosion"),
     ("fatality", "Fatality",
      "Fatal crash / confirmed 11-44 / coroner requested", "Fatality"),
     ("evacuation", "Evacuation / Lockdown",
@@ -126,6 +131,53 @@ _PURSUIT_NOT = re.compile(
     r"native)\s*$"
 )
 # "pursuit transport", a GPS monitor's "pursuit mode".
+# Tactical operations. Only the forms actually used on PCSO and the PDs:
+# a bare "SWAT", "hostage" or "bomb" in this traffic is usually Whisper
+# garbling something else ("TVC, SWAT entrance", "Hostage is on, 97 at",
+# "12-bomb"), and "barricade" is often a road barricade.
+_TACTICAL = re.compile(
+    r"\b(swat (?:call[\s-]?out|team|activat\w+|requested|responding|en route|page|is en route)|"
+    r"(?:request(?:ing)?|start(?:ing)?|activat\w+|notify|page|need) (?:the )?swat|"
+    r"react (?:team|\d+|one|two|three)|"
+    r"special enforcement(?: team| unit)?|set team|"
+    r"barricaded (?:subject|suspect|himself|herself|themselves|themself|in|inside)|"
+    r"(?:subject|suspect|male|female|he|she|party|daughter|son) (?:is |has |has been )?"
+    r"(?:currently |now )?barricaded|"
+    r"hostage (?:situation|negotiat\w+)|said hostage|"
+    r"(?:hold(?:ing)?|held|taken?|taking|took|being held) (?:\w+ ){0,2}hostages?|"
+    # PCSO Disp 5 is the encrypted channel. Nobody says "Dispatch 5" on the
+    # air; they say "switch to channel 5", "work this on channel 5".
+    r"dispatch (?:5|five)|disp 5|"
+    r"(?:switch(?:ing)?|go(?:ing)?|mov(?:e|ing)|meet (?:me|you)|come up|work (?:this|it|that)) "
+    r"(?:to |on |over to )?(?:channel|dispatch) (?:5|five))\b"
+)
+_EXPLOSIVE = re.compile(
+    r"\b((?:an?|loud|possible|multiple|reported|reports? of|type of|transformer|gas|vehicle) explosions?|"
+    r"explosions? (?:heard|reported|at|in|inside|coming)|heard an? explosion|"
+    r"bomb (?:threat|squad|scare|tech\w*)|pipe bomb|possible bomb|explosive device|"
+    r"suspicious (?:package|device))\b"
+)
+
+# A fire dispatch that tones a large assignment is a major incident before
+# anyone arrives: four or more engines/trucks/tenders/dozers, or two or
+# more aircraft. This is the only signal on a dispatch-only channel such as
+# AEU Local, where units report on a command channel we may not hear.
+ASSIGNMENT_MIN_GROUND = 4
+ASSIGNMENT_MIN_AIR = 2
+_DISPATCH_FIRE = re.compile(
+    r"\b((?:multi[\s-]family |residential |commercial )?structure fire|"
+    r"house fire|apartment fire|building fire|"
+    r"vegetation fire|brush fire|wildland fire|"
+    r"(?:passenger |commercial )?vehicle fire)\b"
+)
+_GROUND_UNIT = re.compile(
+    r"\b(engine|truck|water tender|dozer|quint)\s*-?\s*(\d{1,4}(?:[\s-]\d{1,3})?(?:-\d{1,3})?)\b"
+)
+_AIRCRAFT = re.compile(
+    r"\b(air ?attack|air ?tack|copter|helicopter|tanker|helitanker)\s*-?\s*(\d{1,4}(?:[\s-]\d{1,3})?(?:-\d{1,3})?)\b"
+)
+_CALLED_OFF = re.compile(r"\b(cancel\w*|disregard|released?|available|returning)\b")
+
 # Officer emergencies. "1199" is never a time (no minute 99) but it can be
 # an address ("to 1199 Tavistock"). "10-33" alone is usually a time on the
 # fire channels ("AMR 142, 10-33" at 10:33) or a case number, so it counts
@@ -687,6 +739,30 @@ def _wildland(t: str):
     return None, False
 
 
+def _large_assignment(t: str):
+    """A fire dispatch naming a large assignment, as a hit; else None."""
+    m = _DISPATCH_FIRE.search(t)
+    if not m or _NEG.search(t[max(0, m.start() - 48):m.start()]) or _CALLED_OFF.search(t):
+        return None
+    ground = {(k, re.sub(r"[\s-]", "", n)) for k, n in _GROUND_UNIT.findall(t)}
+    air = {(k, re.sub(r"[\s-]", "", n)) for k, n in _AIRCRAFT.findall(t)}
+    if len(ground) < ASSIGNMENT_MIN_GROUND and len(air) < ASSIGNMENT_MIN_AIR:
+        return None
+    kind = m.group(1)
+    if "vehicle" in kind:
+        cat = "other_fire"
+    elif re.search(r"vegetation|brush|wildland", kind):
+        cat = "brush_grass_fire"
+    else:
+        cat = "structure_fire"
+    size = []
+    if ground:
+        size.append(f"{len(ground)} engines")
+    if air:
+        size.append(f"{len(air)} aircraft")
+    return _hit(cat, f"{kind}, {' + '.join(size)}")
+
+
 def _brush(t: str):
     for m in _BRUSH.finditer(t):
         if _NEG.search(t[max(0, m.start() - 48):m.start()]):
@@ -742,6 +818,13 @@ def _classify_major(t: str):
         evidence = _mentioned(t, _SHOOTING)
         return _hit("shooting", evidence)
 
+    tactical = _mentioned(t, _TACTICAL)
+    if tactical:
+        return _hit("tactical", tactical)
+    explosive = _mentioned(t, _EXPLOSIVE)
+    if explosive:
+        return _hit("explosive", explosive)
+
     pursuit = _pursuit(t)
     if pursuit:
         return _hit("pursuit", pursuit)
@@ -778,18 +861,16 @@ def _classify_major(t: str):
         return hit
 
     severity = _mentioned(t, _SEVERITY)
-    if not severity:
-        return None
-
-    other = _mentioned(t, _OTHER_OBJECT)
-    structure = _mentioned(t, _STRUCTURE_OBJECT)
-    if structure:
-        return _hit("structure_fire", severity)
-    if other:
-        return _hit("other_fire", severity)
-    if brush:
-        return None
-    return _hit("other_fire", severity)
+    if severity:
+        other = _mentioned(t, _OTHER_OBJECT)
+        structure = _mentioned(t, _STRUCTURE_OBJECT)
+        if structure:
+            return _hit("structure_fire", severity)
+        if other:
+            return _hit("other_fire", severity)
+        if not brush:
+            return _hit("other_fire", severity)
+    return _large_assignment(t)
 
 
 def _epoch(iso: str) -> float:
@@ -931,8 +1012,12 @@ def _locked_update(path: Path, fn):
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
             data = _load(path)
+            before = json.dumps(data, sort_keys=True)
             result = fn(data)
-            _write_atomic(path, data)
+            # follow_up() runs for every routine call; skip the fsync
+            # unless an alert actually changed.
+            if json.dumps(data, sort_keys=True) != before or not path.exists():
+                _write_atomic(path, data)
             return result
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
