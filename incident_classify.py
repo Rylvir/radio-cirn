@@ -171,7 +171,9 @@ _FATAL = re.compile(
 )
 _FATAL_VIOLENT = re.compile(
     r"\b(fatalit(?:y|ies)|fatal|vehicle|accident|collision|crash|roll[\s-]?over|tc|"
-    r"chp|11-?8[0-3]|shot|shooting|stabb\w+|drown\w*|fire|homicide|187)\b"
+    # not a bare "fire": "out with Fire on the CPR" is the fire department
+    r"chp|11-?8[0-3]|shot|shooting|stabb\w+|drown\w*|homicide|187|on fire|"
+    r"(?:structure|house|vehicle|brush|vegetation) fire)\b"
 )
 _ANIMAL_AFTER = re.compile(r"^\W*(?:deers?|dogs?|cats?|animals?|bears?|coyotes?|raccoons?|turkeys?|skunks?|geese|goose|cow|horse|gear)\b")
 
