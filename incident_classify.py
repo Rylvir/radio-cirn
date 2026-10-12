@@ -171,8 +171,17 @@ _SEVERITY = re.compile(
 _BRUSH = re.compile(
     r"\b((?:brush|grass|vegetation|wildland|timber) fire)\b"
 )
+# "Grass fire" next to a call sign is the dispatch center's name misheard
+# ("Engine 44 grass fire", "grass fire medic 3"), not a fire. All nine
+# "grass fire"s on the fire channels through 2026-10-12 were that.
+_GRASS_CALLSIGN_BEFORE = re.compile(r"(?:\d|\bic)\s*$")
+_GRASS_CALLSIGN_AFTER = re.compile(
+    r"^\s*(?:copy|go ahead|engine|medic|battalion|truck|rescue|squad|alert)\b"
+)
+# "Extended attack" is a major fire. A bare "extended" is not: every use on
+# the fire channels was "extended ETA", "extended on bed delay" and the like.
 _BRUSH_MAJOR = re.compile(
-    r"\b(major|extended|large|campaign|evacuation|acres?|"
+    r"\b(major|extended attack|large|campaign|evacuation|acres?|"
     r"working (?:a )?(?:brush |grass |vegetation |wildland )?fire|"
     r"fully involved)\b"
 )
@@ -269,14 +278,19 @@ def categories_public():
 # Decoder hints. Place and unit words only: severity words (extrication,
 # smoke showing) got copied onto routine calls and tripped the alert rules,
 # and "foresthill" got tacked onto garbled audio as "lincoln forest hill".
-FIRE_HOTWORDS = (
+_PLACE_HOTWORDS = (
     "battalion engine truck auburn lincoln roseville placer nevada "
     "el dorado miller sacramento"
 )
+# Fire adds the dispatch center's name. Units say "Engine 44, Grass Valley"
+# all day, and Whisper wrote it as "grass fire", "grass light", "grass high"
+# a few hundred times; "143 grass fire copy" raised a brush-fire alert.
+# With the hint, 6 of 7 of those clips transcribe correctly.
+FIRE_HOTWORDS = _PLACE_HOTWORDS + " grass valley"
 # Law adds the call-sign words and the phrase Whisper kept mishearing:
 # "Paul 21, area check" came out as "Hall 21, you're ejected" (an MVA alert)
 # until these were hinted, after which it transcribed exactly.
-LAW_HOTWORDS = FIRE_HOTWORDS + " paul boy sam henry charlie robert king union area check"
+LAW_HOTWORDS = _PLACE_HOTWORDS + " paul boy sam henry charlie robert king union area check"
 
 # Whisper sometimes appends the hotword list to a real transmission.
 _HOTWORD_ECHO = re.compile(
@@ -552,6 +566,18 @@ def _officer(t: str):
     return None
 
 
+def _brush(t: str):
+    for m in _BRUSH.finditer(t):
+        if _NEG.search(t[max(0, m.start() - 48):m.start()]):
+            continue
+        if m.group(0) == "grass fire" and (
+                _GRASS_CALLSIGN_BEFORE.search(t[:m.start()])
+                or _GRASS_CALLSIGN_AFTER.search(t[m.end():m.end() + 14])):
+            continue
+        return m.group(0)
+    return None
+
+
 def _pursuit(t: str):
     for m in _PURSUIT.finditer(t):
         before = t[max(0, m.start() - 48):m.start()]
@@ -604,7 +630,7 @@ def _classify_major(t: str):
     if mva:
         return _hit("motor_vehicle_accident", mva)
 
-    brush = _mentioned(t, _BRUSH)
+    brush = _brush(t)
     if brush and _mentioned(t, _BRUSH_MAJOR):
         return _hit("brush_grass_fire", brush)
 

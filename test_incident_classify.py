@@ -62,6 +62,27 @@ class ClassifyTests(unittest.TestCase):
     def test_dumpster_without_severity(self):
         self.assertIsNone(ic.classify("dumpster fire, nothing showing"))
 
+    def test_grass_valley_misheard_as_grass_fire(self):
+        for text in (
+            "143, you are walked on repeat. We'll be extended in right out on the wall. "
+            "143 grass fire copy 10-0-2.",
+            "Engine 2363 grass fire. En route burn flat, 2 acres. 0753.",
+            "Grass fire medic 3, clear and available, large animal on the road",
+            "Loma IC grass fire, we have a major problem with the hydrant",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(ic.classify(text))
+
+    def test_real_grass_fire_still_alerts(self):
+        for text in ("report of a grass fire, about 2 acres, moderate rate of spread",
+                     "grass fire off Highway 49, evacuation of Gold Hill Road",
+                     "vegetation fire, extended attack, requesting two more dozers"):
+            with self.subTest(text=text):
+                self.assertEqual(ic.classify(text)["category"], "brush_grass_fire")
+
+    def test_extended_alone_is_not_major(self):
+        self.assertIsNone(ic.classify("vegetation fire, AMR 140 has an extended ETA of 15 minutes"))
+
     def test_small_grass_fire(self):
         self.assertIsNone(ic.classify("small grass fire behind the station"))
 
@@ -310,6 +331,12 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(ic.strip_prompt_echo(text), "Beep. Beep.")
         law = "Copy. henry charlie robert king union area check"
         self.assertEqual(ic.strip_prompt_echo(law), "Copy.")
+        fire = "Beep. miller sacramento grass valley"
+        self.assertEqual(ic.strip_prompt_echo(fire), "Beep.")
+
+    def test_grass_valley_at_the_end_of_a_real_call_is_kept(self):
+        text = "Engine 2363, Grass Valley"
+        self.assertEqual(ic.strip_prompt_echo(text), text)
 
     def test_plate_read_with_call_sign_words_is_kept(self):
         for text in ("13 Charlie, 11-26, Gordon Union Boy Henry",
